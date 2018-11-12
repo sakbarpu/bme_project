@@ -7,6 +7,8 @@ numpy file to an specified output path.
 
 TODO: 
 
+make one context word only in one iter
+make getting train sample more efficient randbits module
 implement CBOW NS
 implement SG HS 
 implement CBOW HS
@@ -26,12 +28,14 @@ import random
 import matplotlib.pyplot as plt
 import itertools
 import multiprocessing
+import fastrand
 
 import warnings
 warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
 
 from scipy.special import expit
 from math import ceil
+from operator import add, sub
 
 class MyArgParser(argparse.ArgumentParser):
 
@@ -272,6 +276,7 @@ class Word2Vec:
 		if contentpath: self.total_sents_in_corpus = len(LineSentences(contentpath))
 		elif sentences: self.total_sents_in_corpus = len(sentences)
 		#self.exp_table = self.compute_exp_table()
+		self.ops = (add, sub)
 		self.W = {}
 		self.Z = {}
 
@@ -311,7 +316,7 @@ class Word2Vec:
 		The unigram table is constructed as follows: 
 		For each word x in the vocab we find its count count(x) in the corpus
 		We raise its count to power 3/4 count(x)^(3/4)
-		Then we divide it to the normalization factor Z = sum_x count(x)^(3/4)			
+		Then we divide it by the normalization factor Z = sum_x count(x)^(3/4) where x loops over vocab
 		Save all the results in a list
 		
 		'''
@@ -349,7 +354,13 @@ class Word2Vec:
 		word out from the unigram to the power 3/4 distribution.
 		'''
 		self.sentences = LineSentences(self.contentpath)
+		num_sents = len(self.sentences)
+		count_sent = 0
 		for sent in self.sentences:
+			percent_sent_done = (count_sent/num_sents)*100 
+			if percent_sent_done % 5==0: print ("PROGRESS:", percent_sent_done, "%, Working on sentence #",
+								 count_sent, "out of total", num_sents, "sentences")
+			count_sent += 1
 			for w in sent.split(" "):
 				self.total_words_in_corpus += 1
 				w = w.strip()
@@ -357,7 +368,7 @@ class Word2Vec:
 					self.vocab[w] += 1
 				else:
 					self.vocab[w] = 1
-		print ("\nThere are total ", self.total_words_in_corpus, " words in corpus")
+		print ("\nThere are total ", self.total_words_in_corpus, " words in corpus of size", num_sents)
 		print ("Out of which ", len(self.vocab), "are distinct words")
 		self.trim_vocab()
 		self.build_sorted_vocab()
@@ -398,16 +409,19 @@ class Word2Vec:
 	def get_random_train_sample_from_a_sent(self, sent):
 		'''
                 Given a sentence sent get a random sample out of it
-                Random sample means a random word with surrounding words
+                Random sample means a random word with a context word chosen from surrounding words
 		'''
 
-		rand_pos_in_sent = np.random.randint(0, len(sent))
+		#rand_pos_in_sent = np.random.randint(0, len(sent))
+		#rand_pos_in_sent = int(len(sent) * random.random())
+		rand_pos_in_sent = fastrand.pcg32bounded(len(sent))		
 
 		if rand_pos_in_sent - self.window < 0: return #check for boundary
 		if rand_pos_in_sent + self.window > len(sent): return
 
-		return [sent[rand_pos_in_sent-self.window:rand_pos_in_sent] + sent[rand_pos_in_sent+1:rand_pos_in_sent+self.window],
-			sent[rand_pos_in_sent]]		
+		op = random.choice(self.ops)
+		#return [sent[op(rand_pos_in_sent,int(self.window*random.random()))], sent[rand_pos_in_sent]]
+		return [sent[op(rand_pos_in_sent,fastrand.pcg32bounded(self.window))], sent[rand_pos_in_sent]]
 			
 	def call_a_sgwithns_thread(self, local_sents, start, stop, counter_worker):
 		'''
@@ -436,36 +450,43 @@ class Word2Vec:
 						self.alpha = self.start_alpha * (1.0 - local_num_words_processed / float(self.iters * self.total_words_in_corpus + 1))
 						if self.alpha < self.start_alpha * 0.0001: self.alpha = self.start_alpha * 0.0001
 						
+						print ("WORKER:", counter_worker, ", Iter:", local_iter, ", Batch:", local_batch_count)
 					train_sample = self.get_random_train_sample_from_a_sent(sent) #get a train sample
 					if train_sample is None: continue #if the sample is no good we got a None
 					if train_sample[1] not in self.W: continue #no point training for this term as it is not in W (i.e. trimmed vocab)
 
-					for context_word in train_sample[0]:
-						if context_word == train_sample[1]: continue #no point predicting from same input same output
-						if context_word not in self.W: continue #no point training with this context term as it is not in vocab
+					context_word = train_sample[0]
+					focus_word = train_sample[1]
+					if context_word == focus_word: continue #no point predicting from same input same output
+					if context_word not in self.W: continue #no point training with this context term as it is not in vocab
 
-						local_num_words_processed += 1
+					local_num_words_processed += 1
+					
+					neu = np.zeros((self.size),dtype=float)
+					for d in range(0, self.negative):
+						if d == 0: 
+							label = 1
+						else:
+							#context_word = self.sorted_vocab_words[
+							#			self.unigram_table.searchsorted(np.random.randint(self.unigram_table[-1]))]
+							#context_word = self.sorted_vocab_words[
+							#			self.unigram_table.searchsorted(int(self.unigram_table[-1]*random.random()))]
+							context_word = self.sorted_vocab_words[
+										self.unigram_table.searchsorted(fastrand.pcg32bounded(self.unigram_table[-1]))]
+	
+							label = 0
+
+						f = np.dot(self.W[focus_word],self.Z[context_word]) #propagate proj to output
+
+						if (f > self.MAX_EXP): g = (label - 1) * self.alpha
+						elif (f < -self.MAX_EXP): g = (label - 0) * self.alpha
+						else: g = (label - expit(f)) * self.alpha # gradient calculation
 						
-						neu = np.zeros((self.size),dtype=float)
-						for d in range(0, self.negative):
-							if d == 0: 
-								label = 1
-							else:
-								context_word = self.sorted_vocab_words[
-											self.unigram_table.searchsorted(np.random.randint(self.unigram_table[-1]))]
-								label = 0
-
-							f = np.dot(self.W[train_sample[1]],self.Z[context_word]) #propagate proj to output
-
-							if (f > self.MAX_EXP): g = (label - 1) * self.alpha
-							elif (f < -self.MAX_EXP): g = (label - 0) * self.alpha
-							else: g = (label - expit(f)) * self.alpha # gradient calculation
-							
-							neu = neu + (g * self.Z[context_word]) # error sum calculation
-							
-							self.Z[context_word] = self.Z[context_word] + (g * self.W[train_sample[1]]) #learn proj to output
+						neu = neu + (g * self.Z[context_word]) # error sum calculation
 						
-						self.W[train_sample[1]] = self.W[train_sample[1]] + neu # learn input to proj 
+						self.Z[context_word] = self.Z[context_word] + (g * self.W[focus_word]) #learn proj to output
+					
+					self.W[focus_word] = self.W[focus_word] + neu # learn input to proj
 			print ("WORKER:", counter_worker, "ITER:", local_iter, "Took time:", time.time()-start_time)	
 		print ("WORKER:", counter_worker, "DONE Training,", "Trained", local_num_words_processed, "examples")
 		
@@ -475,7 +496,6 @@ class Word2Vec:
 		print ("\nWorking with ", self.workers, " workers, with each worker working on", m, "sentences")
 		
 		processes = []
-		#lock = multiprocessing.Lock()
 		counter_worker = 0
 		for counter in range(0,self.total_sents_in_corpus,m):
 			print ("WORKER: ", counter_worker, ", will work on sentences from :", counter, "to: ", min(self.total_sents_in_corpus, counter+m), "\n")
@@ -491,18 +511,18 @@ class Word2Vec:
 		This function builds the skipgram model
 
 		'''
-		print ("Building skipgram model\n")
+		print ("Building skipgram model...\n")
 		
 		if self.negative > 0:
 			self.train_sg_model_with_ns()
-			print ("DONE WITH TRAINING SG model with Negative Sampling")
+			print ("\n\nDONE WITH TRAINING SG model with Negative Sampling")
 		else: 
 			#TODO: NOT IMPLEMENTED YET THE SG MODELING WITH HS
 			pass 
 
 	def build_cbow_model(self):
 
-		print ("Building cbow model")
+		print ("Building cbow model...\n")
 		
 		if self.negative > 0:
 			#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH NS
@@ -513,6 +533,7 @@ class Word2Vec:
 
 	def build_model(self):
 		
+		print ("Now learning the vocab of the corpus...\n")
 		self.learn_vocab()
 		print ("Learned vocabulary from corpus\n")
 		
@@ -590,19 +611,19 @@ def main(argv):
 		print ("You need to either set the corpuspath or processedfilepath to provide input")
 		exit()
 	
-	print ("Got sentences list ")
+	print ("Got sentences list \n")
 	
-	print ("\nNow training with word2vec algorithm")
+	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = Word2Vec(contentpath=processedfilepath, min_count=0, size=500, sg=1, hs=0, negative=15, iters=1,
-					 window=8, compute_loss=True, workers=16)
+	model = Word2Vec(contentpath=processedfilepath, min_count=3, size=500, sg=1, hs=0, negative=15, iters=4,
+					 window=8, compute_loss=True, workers=20)
 	model.build_model()
 	t1 = time.time()
-	print ("Done with training. Took time: ", t1-t0, "secs")
+	print ("Done. Took time: ", t1-t0, "secs\n\n")
 
 	print ("Saving model to disk ", args.output)
 	model.save(args.output)
-	print ("Saved")
+	print ("Saved\n\n")
 
 if __name__ == "__main__":
 	main(sys.argv)

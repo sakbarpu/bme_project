@@ -42,7 +42,7 @@ def top_most_similar(vecs):
 	r = 1
 	for x in most_sim[1:11]:
 		print ('\n') 
-		print (r, ':', x[0], x[1])
+		print (r, ':', x[1], x[2])
 		r+=1
 def main(argv):
 
@@ -67,7 +67,9 @@ def main(argv):
 	print ("Loading model from disk ", args.vecspath+'/model.output')
 	if whichvecs == 'a': vecs = pickle.load(open(args.vecspath+'/input.vectors','rb'))
 	elif whichvecs == 'b': vecs = pickle.load(open(args.vecspath+'/output.vectors','rb'))
-	print ("Loaded Model ")
+	print ("Loaded Model:")
+	print ("Vocabulary size is :", len(vecs))
+	print ("Vector dimenstion is :", len(vecs[list(vecs.keys())[0]])) 
 
 	print ( "\n\n\n",
 		"		       Input							Vectors\n",
