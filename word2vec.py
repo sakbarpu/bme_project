@@ -7,7 +7,6 @@ numpy file to an specified output path.
 
 TODO: 
 
-make one context word only in one iter
 make getting train sample more efficient randbits module
 implement CBOW NS
 implement SG HS 
@@ -28,7 +27,7 @@ import random
 import matplotlib.pyplot as plt
 import itertools
 import multiprocessing
-import fastrand
+#import fastrand
 
 import warnings
 warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
@@ -414,15 +413,19 @@ class Word2Vec:
 
 		#rand_pos_in_sent = np.random.randint(0, len(sent))
 		#rand_pos_in_sent = int(len(sent) * random.random())
-		rand_pos_in_sent = fastrand.pcg32bounded(len(sent))		
+		#rand_pos_in_sent = fastrand.pcg32bounded(len(sent))		
+		rand_pos_in_sent = 2
 
 		if rand_pos_in_sent - self.window < 0: return #check for boundary
 		if rand_pos_in_sent + self.window > len(sent): return
 
-		op = random.choice(self.ops)
+		#op = random.choice(self.ops)
+		#return [sent[rand_pos_in_sent - self.window +  int(self.window*random.random())], sent[rand_pos_in_sent]]
 		#return [sent[op(rand_pos_in_sent,int(self.window*random.random()))], sent[rand_pos_in_sent]]
-		return [sent[op(rand_pos_in_sent,fastrand.pcg32bounded(self.window))], sent[rand_pos_in_sent]]
-			
+		#return [sent[op(rand_pos_in_sent,fastrand.pcg32bounded(self.window))], sent[rand_pos_in_sent]]
+		#return [sent[rand_pos_in_sent - self.window + fastrand.pcg32bounded(self.window * 2)], sent[rand_pos_in_sent]]
+		return [sent[1], sent[2]]
+	
 	def call_a_sgwithns_thread(self, local_sents, start, stop, counter_worker):
 		'''
                 This is a function that implements a single thread functionality and should be called from the multiprocessing Process
@@ -470,10 +473,10 @@ class Word2Vec:
 							#context_word = self.sorted_vocab_words[
 							#			self.unigram_table.searchsorted(np.random.randint(self.unigram_table[-1]))]
 							#context_word = self.sorted_vocab_words[
-							#			self.unigram_table.searchsorted(int(self.unigram_table[-1]*random.random()))]
-							context_word = self.sorted_vocab_words[
-										self.unigram_table.searchsorted(fastrand.pcg32bounded(self.unigram_table[-1]))]
-	
+						        #			self.unigram_table.searchsorted(int(self.unigram_table[-1]*random.random()))]
+							#context_word = self.sorted_vocab_words[
+							#			self.unigram_table.searchsorted(fastrand.pcg32bounded(self.unigram_table[-1]))]
+							context_word = self.sorted_vocab_words[self.unigram_table.searchsorted(self.unigram_table[-1])]
 							label = 0
 
 						f = np.dot(self.W[focus_word],self.Z[context_word]) #propagate proj to output
@@ -615,7 +618,7 @@ def main(argv):
 	
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = Word2Vec(contentpath=processedfilepath, min_count=3, size=500, sg=1, hs=0, negative=15, iters=4,
+	model = Word2Vec(contentpath=processedfilepath, min_count=3, size=500, sg=1, hs=0, negative=15, iters=2,
 					 window=8, compute_loss=True, workers=20)
 	model.build_model()
 	t1 = time.time()
