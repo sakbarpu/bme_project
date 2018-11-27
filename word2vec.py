@@ -7,7 +7,10 @@ numpy file to an specified output path.
 
 TODO: 
 
-make getting train sample more efficient randbits module
+how does sample work? downsampling is there in word2vec
+why is the result not accurate
+vectorize implementation needs to be there for calculating f g and other values
+change the IO system in the main function (make it so that it can read files process them save them in a single file separated by line break give the path to this single file to word2vec)
 implement CBOW NS
 implement SG HS 
 implement CBOW HS
@@ -405,16 +408,21 @@ class Word2Vec:
 			self.W[word] = np.random.rand(self.size)
 			self.Z[word] = np.random.rand(self.size)
 
-	def get_random_train_sample_from_a_sent(self, sent):
+	def get_random_train_sample_from_a_sent(self, sent, pos_term):
+		s = max(0, pos_term - self.window)
+		e = min(len(sent), pos_term + int(self.window * random.random()))
+		return [sent[s : e], sent[pos_term]]
+
+	def get_random_train_sample_from_a_sent1(self, sent):
 		'''
                 Given a sentence sent get a random sample out of it
                 Random sample means a random word with a context word chosen from surrounding words
 		'''
 
 		#rand_pos_in_sent = np.random.randint(0, len(sent))
-		#rand_pos_in_sent = int(len(sent) * random.random())
+		rand_pos_in_sent = int(len(sent) * random.random())
 		#rand_pos_in_sent = fastrand.pcg32bounded(len(sent))		
-		rand_pos_in_sent = 2
+		#rand_pos_in_sent = 2
 
 		if rand_pos_in_sent - self.window < 0: return #check for boundary
 		if rand_pos_in_sent + self.window > len(sent): return
@@ -422,11 +430,14 @@ class Word2Vec:
 		#op = random.choice(self.ops)
 		#return [sent[rand_pos_in_sent - self.window +  int(self.window*random.random())], sent[rand_pos_in_sent]]
 		#return [sent[op(rand_pos_in_sent,int(self.window*random.random()))], sent[rand_pos_in_sent]]
+		return [sent[rand_pos_in_sent - self.window : rand_pos_in_sent + int(self.window*random.random())], sent[rand_pos_in_sent]]
 		#return [sent[op(rand_pos_in_sent,fastrand.pcg32bounded(self.window))], sent[rand_pos_in_sent]]
 		#return [sent[rand_pos_in_sent - self.window + fastrand.pcg32bounded(self.window * 2)], sent[rand_pos_in_sent]]
-		return [sent[1], sent[2]]
-	
-	def call_a_sgwithns_thread(self, local_sents, start, stop, counter_worker):
+		#return [sent[1], sent[2]]
+
+
+
+	def call_a_sgwithns_thread1(self, local_sents, start, stop, counter_worker):
 		'''
                 This is a function that implements a single thread functionality and should be called from the multiprocessing Process
                 This implements SG model with NS heuristic routine
@@ -438,7 +449,8 @@ class Word2Vec:
 
 		local_num_words_processed = 0
 		local_batch_count = 0
-		
+		labels = np.zeros(self.negative+1)
+		labels[0] = 1.0	
 		for local_iter in range(self.iters): #loop over this worker for iter number of times
 			start_time = time.time()
 			for sent in local_sents[start,stop]: #the data chunk for this worker is [start,stop] so loop over that chunk
@@ -462,34 +474,107 @@ class Word2Vec:
 					focus_word = train_sample[1]
 					if context_word == focus_word: continue #no point predicting from same input same output
 					if context_word not in self.W: continue #no point training with this context term as it is not in vocab
-
+					v_w = self.W[focus_word]
+					err_sum = np.zeros(self.size)
 					local_num_words_processed += 1
 					
-					neu = np.zeros((self.size),dtype=float)
+					words = [context_word]
 					for d in range(0, self.negative):
-						if d == 0: 
-							label = 1
-						else:
-							#context_word = self.sorted_vocab_words[
-							#			self.unigram_table.searchsorted(np.random.randint(self.unigram_table[-1]))]
-							#context_word = self.sorted_vocab_words[
-						        #			self.unigram_table.searchsorted(int(self.unigram_table[-1]*random.random()))]
-							#context_word = self.sorted_vocab_words[
-							#			self.unigram_table.searchsorted(fastrand.pcg32bounded(self.unigram_table[-1]))]
-							context_word = self.sorted_vocab_words[self.unigram_table.searchsorted(self.unigram_table[-1])]
-							label = 0
+						words.append(self.sorted_vocab_words[self.unigram_table.searchsorted(int(self.unigram_table[-1])*random.random())])
+					v_p_ws = np.array([self.Z[word] for word in words]).T
+					f = np.dot(v_w, v_p_ws) #propagate proj to output
+					output = expit(f)
+					g = (labels - output) * self.alpha
+					tmp = np.outer(g,v_w).T
+					for c in range(len(words)): self.Z[words[c]] += tmp[:,c]
+					err_sum += np.dot(g, v_p_ws.T)
+					self.W[focus_word] += err_sum
+			print ("WORKER:", counter_worker, "ITER:", local_iter, "Took time:", time.time()-start_time)	
+		print ("WORKER:", counter_worker, "DONE Training,", "Trained", local_num_words_processed, "examples")
+	
 
-						f = np.dot(self.W[focus_word],self.Z[context_word]) #propagate proj to output
 
-						if (f > self.MAX_EXP): g = (label - 1) * self.alpha
-						elif (f < -self.MAX_EXP): g = (label - 0) * self.alpha
-						else: g = (label - expit(f)) * self.alpha # gradient calculation
+
+
+	
+	def call_a_sgwithns_thread(self, local_sents, start, stop, counter_worker):
+		'''
+                This is a function that implements a single thread functionality and should be called from the multiprocessing Process
+                This implements SG model with NS heuristic routine
+                arg1: local_sents is the local copy of LineSentences instance for this thread
+                arg2: start is the starting number of sentence for the chunk of sentences which this thread will train on
+                arg3: stop is the ending number of sentence for the chunk of sentences which this thread will train on
+                arg4: counter_worker is the number of this worker thread
+		'''
+
+		local_num_words_processed = 0
+		local_batch_count = 0
+		#print ("***", counter_worker, start, stop)
+		
+		for local_iter in range(self.iters): #loop over this worker for iter number of times
+			start_time = time.time()
+			sent_count = 0
+			for sent in local_sents[start,stop]: #the data chunk for this worker is [start,stop] so loop over that chunk
+				sent_count += 1
+				#print ("===", counter_worker, local_iter, sent)
+				sent = sent.strip().split(" ") #tokenize the current sentence
+				if len(sent) < self.window: continue #no need to process this small sentence
+
+				for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
+					#print (counter_worker, counter_terms)
+					if local_num_words_processed % self.batch_words == 0:
+						local_batch_count += 1
+						#update current alpha 
+						self.alpha = self.start_alpha * (1.0 - local_num_words_processed / float(self.iters * self.total_words_in_corpus + 1))
+						if self.alpha < self.start_alpha * 0.0001: self.alpha = self.start_alpha * 0.0001
 						
-						neu = neu + (g * self.Z[context_word]) # error sum calculation
-						
-						self.Z[context_word] = self.Z[context_word] + (g * self.W[focus_word]) #learn proj to output
+						print ("WORKER:", counter_worker, ", Iter:", local_iter, ", Batch:", local_batch_count)
+					train_sample = self.get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
+					if train_sample is None: continue #if the sample is no good we got a None
+					if train_sample[1] not in self.W: continue #no point training for this term as it is not in W (i.e. trimmed vocab)
 					
-					self.W[focus_word] = self.W[focus_word] + neu # learn input to proj
+					#context_word = train_sample[0]
+					for context_word in train_sample[0]:	
+						focus_word = train_sample[1]
+						if context_word == focus_word: continue #no point predicting from same input same output
+						if context_word not in self.W: continue #no point training with this context term as it is not in vocab
+						
+						#print ("worker:", counter_worker, "true:", context_word, focus_word)
+						local_num_words_processed += 1
+						
+						neu = np.zeros((self.size),dtype=float)
+						#for d in range(0, self.negative):
+						d = 0
+						while d < self.negative + 1:
+							if d == 0: 
+								label = 1.0
+							else:
+								#context_word = self.sorted_vocab_words[
+								#			self.unigram_table.searchsorted(np.random.randint(self.unigram_table[-1]))]
+								context_word = self.sorted_vocab_words[
+											self.unigram_table.searchsorted(int(self.unigram_table[-1]*random.random()))]
+								#context_word = self.sorted_vocab_words[
+								#			self.unigram_table.searchsorted(fastrand.pcg32bounded(self.unigram_table[-1]))]
+								#context_word = self.sorted_vocab_words[self.unigram_table.searchsorted(self.unigram_table[-1])]
+								if context_word == focus_word: continue
+								label = 0.0
+
+							#print ("\nd", d, context_word, focus_word)	
+							#print (self.W[focus_word].shape, self.Z[context_word].shape)
+							f = np.dot(self.W[focus_word],self.Z[context_word]) #propagate proj to output
+							#print ("f", f, "sigf", expit(f), "label", label)
+							if (f > self.MAX_EXP): g = (label - 1.0) * self.alpha
+							elif (f < -self.MAX_EXP): g = (label - 0.0) * self.alpha
+							else: g = (label - expit(f)) * self.alpha # gradient calculation
+							print ("iter", local_iter, "sent_count", sent_count, "term_count", counter_terms, "d", d, 
+							       "focus", focus_word, "context", context_word, "f", f, "sigf", expit(f), "label", label, "g", g)
+							neu = neu + (g * self.Z[context_word]) # error sum calculation
+							
+							self.Z[context_word] = self.Z[context_word] + (g * self.W[focus_word]) #learn proj to output
+							d += 1
+						#print (neu)
+						self.W[focus_word] = self.W[focus_word] + neu # learn input to proj
+						#return
 			print ("WORKER:", counter_worker, "ITER:", local_iter, "Took time:", time.time()-start_time)	
 		print ("WORKER:", counter_worker, "DONE Training,", "Trained", local_num_words_processed, "examples")
 		
@@ -615,11 +700,11 @@ def main(argv):
 		exit()
 	
 	print ("Got sentences list \n")
-	
+
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = Word2Vec(contentpath=processedfilepath, min_count=3, size=500, sg=1, hs=0, negative=15, iters=2,
-					 window=8, compute_loss=True, workers=20)
+	model = Word2Vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, hs=0, negative=30, iters=20,
+					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=1000)
 	model.build_model()
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
