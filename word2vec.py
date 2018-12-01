@@ -1,43 +1,21 @@
-'''
-This is the implementation of word2vec algorithm.
-
-It takes as input the corpus file and the word2vec 
-parameters file, and returns word embeddings saved as 
-numpy file to an specified output path.
-
-TODO: 
-
-how does sample work? downsampling is there in word2vec
-why is the result not accurate
-vectorize implementation needs to be there for calculating f g and other values
-change the IO system in the main function (make it so that it can read files process them save them in a single file separated by line break give the path to this single file to word2vec)
-implement CBOW NS
-implement SG HS 
-implement CBOW HS
-
-'''
-
 import sys, os, time
-import logging
 import argparse
 import fnmatch
-import nltk
+import nltk #only used for stemming (a preprocessing step for text data)
 import regex
 import string
-import pickle
-import numpy as np
 import random
-import matplotlib.pyplot as plt
 import itertools
 import multiprocessing
-#import fastrand
-
+import math
+import struct
 import warnings
-warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
+import pickle
+import numpy as np
 
-from scipy.special import expit
+from multiprocessing import Pool, Value, Array
 from math import ceil
-from operator import add, sub
+from scipy.special import expit
 
 class MyArgParser(argparse.ArgumentParser):
 
@@ -125,6 +103,7 @@ class Reader:
 		ret1: object of list of sentences
 		'''
 		return LineSentences(file_path)
+
 
 class Preprocessor:
 	'''
@@ -235,418 +214,327 @@ class Preprocessor:
 		self.processed_content = self.stemmed_content
 		return self.processed_content
 
-class Word2Vec:
 
-	def __init__(self, contentpath=None, sentences=None, size=100, alpha=0.025, window=5, 
-				min_count=5, sample=0.001, 
-				workers=3, min_alpha=0.0001, sg=1, hs=0, negative=5, 
-				ns_exponent=0.75, cbow_mean=1, iters=5, 
-				batch_words=10000, compute_loss=False):
-		
-		self.contentpath = contentpath
-		self.sentences = sentences
-		self.size = size
-		self.alpha = alpha
-		self.window = window
-		self.min_count = min_count
-		self.sample = sample
-		self.workers = workers
-		self.min_alpha = min_alpha
-		self.sg = sg
-		self.hs = hs
-		self.negative = negative
-		self.ns_exponent = ns_exponent
-		self.cbow_mean = cbow_mean
-		self.iters = iters
-		self.batch_words = batch_words
-		self.compute_loss = compute_loss
+def get_neg_samples(unigram_table, count):
+	indices = np.random.randint(low=0, high=len(unigram_table), size=count)
+	return [unigram_table[i] for i in indices]
 
-		self.EXP_TABLE_SIZE = 1000
-		self.MAX_STRING = 100
-		self.MAX_EXP = 6
-		self.MAX_SENTENCE_LEN = 1000
-		self.MAX_CODE_LENGTH = 40
+def get_random_train_sample_from_a_sent(sent, pos_term):
+	rand_win = ceil(window * random.random())
+	s = max(0, pos_term - rand_win)
+	e = min(len(sent), pos_term + rand_win + 1)
+	return [sent[s : pos_term] + sent[pos_term + 1 : e], sent[pos_term]]
+
+def callp(worker):
+	total_sents_in_corpus = len(content_file)	
+	m = ceil(total_sents_in_corpus / workers)
+	start = m * worker 
+	end = min(total_sents_in_corpus, start+m)
+	
+	size = W.shape[1]
+	
+	local_alpha = alpha
+	local_num_words_processed = 0
+	last_local_num_words_processed = 0
+	
+	for local_iter in range(iters):
+		for sent in content_file[start,end]: #the data chunk for this worker is [start,stop] so loop over that chunk
+			sent = sent.strip().split(" ") #tokenize the current sentence
+			if len(sent) < window: continue #no need to process this small sentence
+			
+			sent = ['<start>'] + sent + ['<end>']
+			tmpdelme = sent
+
+			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
 		
-		self.vocab = {}
-		self.unigram_table = None
-		self.sorted_vocab_words = []
-		self.sorted_vocab_words_counts = []
-		self.current_num_iters = 0
-		self.current_num_words_processed = 0
-		self.start_alpha = alpha
-		self.total_words_in_corpus = 0
-		if contentpath: self.total_sents_in_corpus = len(LineSentences(contentpath))
-		elif sentences: self.total_sents_in_corpus = len(sentences)
-		#self.exp_table = self.compute_exp_table()
-		self.ops = (add, sub)
-		self.W = {}
-		self.Z = {}
+			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
+				if local_num_words_processed  % batch_words == 0:
+					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
+					last_local_num_words_count = local_num_words_processed
+
+					# Update alpha
+					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
+					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
+					
+					print ("WORKER:", worker, ", Iter:", local_iter, ", Words:", curr_num_words_processed.value, "of", total_words_in_corpus)
+
+				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
+				if train_sample is None: continue #if the sample is no good we got a None
+				
+				local_num_words_processed += 1 
+				context = train_sample[0]
+				focus = train_sample[1]
+
+				for context_word in context:
+					neu1e = np.zeros(size)
+
+					if negative > 0:
+						classifiers = [(focus, 1.0)] + [(neg_sample, 0.0) for neg_sample in get_neg_samples(unigram_table, negative)]
+					else:
+						#classifiers = zip(vocab[token].path, vocab[token].code)
+						pass
+
+					for target, label in classifiers:
+						z = np.dot(W[context_word], Z[target])
+						p = sigmoid(z)
+						g = local_alpha * (label - p)
+						neu1e += g * Z[target]				         # Error to backpropagate to syn0
+						Z[target] += g * W[context_word] # Update syn1
+
+					W[context_word] += neu1e
+
+
+def init_process(cp, vm, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp):
+
+	global content_file, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative
+	global alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed, total_words_in_corpus
+
+	contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, Wt, Zt, unigram_table, negative = cp, vm, vws, vwscs, w, z, ut, neg 
+	alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed =  a, ma, win, bws, its, works, cnwp
+
+	content_file = LineSentences(cp)
+	total_words_in_corpus = sum(sorted_vocab_words_counts)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter('ignore', RuntimeWarning)
+		W = np.ctypeslib.as_array(Wt)
+		Z = np.ctypeslib.as_array(Zt)
+
+def train_sg_model_with_ns(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
+				alpha, min_alpha, window, batch_words, iters, workers):
+
+	total_sents_in_corpus = len(LineSentences(contentpath))
+	m = ceil(total_sents_in_corpus / workers)
+	print ("\nWorking with ", workers, " workers, with each worker working on", m, "sentences")
+
+	current_num_words_processed = Value('i', 0)	
+
+	t = time.time()
+	pool = Pool(processes=workers, initializer=init_process,
+			initargs=(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
+					alpha, min_alpha, window, batch_words, iters, workers, current_num_words_processed))
+	pool.map(callp, range(workers))
+	print ("time", time.time() - t) 
+	
+	save_model(vocab_map, W, Z, "result/")
+
+def init_model(vocab, size):
+	'''
+	initializing model 
+	weight/parameters from input to proj layer W init random
+	W in MxN. M is the inherent dims of vectors and N is the total number of words in the vocab
+	Z is also MxN weight/parameter matrix from proj to output.
+	Z is init as all 0s.
+	We use dicts data structure for storing W and Z
+			_						_
+	W =  |word1		 word2 ... wordN|
+		1|0.1		0.2			0.4 |
+		.| .		 .			 .	|
+		.| .		 .			 .	|
+		.| .		 .			 .	|
+		M|0.2		0.1			0.8 |
+		 |_						 _|
+	
+	Z =  |word1		 word2 ... wordN|
+		1|0.0		0.0			0.0 |
+		.| .		 .			 .	|
+		.| .		 .			 .	|
+		.| .		 .			 .	|
+		M|0.0		0.0			0.0 |
+		 |_						 _|
 
 	'''
-	def compute_exp_table(self):
 
-		exp_table = []
-		for i in range(0,self.EXP_TABLE_SIZE):
-			tmp = np.exp((i / float(self.EXP_TABLE_SIZE) * 2 - 1) * self.MAX_EXP)
-			exp_table.append(tmp / (tmp+1))
-		return exp_table
+	tmp = np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size))
+	W = np.ctypeslib.as_ctypes(tmp)	
+	W = Array(W._type_, W, lock=False)
+
+	tmp = np.zeros(shape=(len(vocab),size))
+	Z = np.ctypeslib.as_ctypes(tmp)
+	Z = Array(Z._type_, Z, lock=False)
+
+	return (W, Z)
+
+def build_vocab_map_word2int(sorted_vocab_words):
+	vocab_map = {}
+	c = 0
+	for word in sorted_vocab_words:
+		vocab_map[word] = c
+		c += 1
+	return vocab_map
+
+def trim_vocab(vocab, min_count):
 	'''
-	def trim_vocab(self):
-		'''
-		For removing less frequent words from the vocab.
-		If count of a certain word is < min_count it is removed from vocab
-		and not considered while training.
-		'''
-		for k in list(self.vocab.keys()):
-			if self.vocab[k] < self.min_count:
-				del self.vocab[k]
+	For removing less frequent words from the vocab.
+	If count of a certain word is < min_count it is removed from vocab
+	and not considered while training.
+	'''
 
-	def build_sorted_vocab(self):
-		'''
-		form two lists. one of sorted vocab words. the other of its count corresponding.
-		'''
-		
-		self.sorted_vocab_words = sorted(self.vocab.keys())
-		self.sorted_vocab_words_counts = [self.vocab[x] for x in self.sorted_vocab_words]
+	vocab['<unk>'] = 0
+	for k in list(vocab.keys()):
+		if vocab[k] < min_count:
+			vocab['<unk>'] += 1
+			del vocab[k]
+	if '<unk>' not in vocab: vocab['<unk>'] = 0
+	return vocab
 
-
-	def build_unigram_table(self, domain=2**31 - 1):
-		'''
-		We build a unigram table here so that we can call it when getting a random word in negative sampling
-		Following word2vec folks we raise the power of the count to 3/4
-		
-		The unigram table is constructed as follows: 
-		For each word x in the vocab we find its count count(x) in the corpus
-		We raise its count to power 3/4 count(x)^(3/4)
-		Then we divide it by the normalization factor Z = sum_x count(x)^(3/4) where x loops over vocab
-		Save all the results in a list
-		
-		'''
-
-		vals_raised_power = np.power(self.sorted_vocab_words_counts, 0.75)
-		sum_all_powered_vals = np.sum(vals_raised_power)
-		
-		self.unigram_table = np.zeros(len(self.sorted_vocab_words_counts), dtype=np.uint32)
-		cum = 0.0
-		for a in range(0,len(self.sorted_vocab_words_counts)):
-			cum += np.power(self.sorted_vocab_words_counts[a], 0.75)
-			self.unigram_table[a] = round(cum / sum_all_powered_vals * domain)
-
-		if len(self.unigram_table) > 0:
-			assert self.unigram_table[-1] == domain
-
-	def learn_vocab(self):
-		'''
-		This is where the corpus is scanned and relevant information are extracted
-		This function is called at the start of the modeling.
-		Learning the vocab means populating the self.vocab dictionary with the words
-		found in the corpus along with their total count in the corpus.
-		
-		So if there are 4 words in the corpus "dog", "cat", "is", and "am" with 
-		frequencies/count 4, 3, 10, and 1, respectively, then we will end up with a 
-		vocab {"cat":3, "dog":4, "am":1, "is":10}.
-		
-		We also trim the vocab removing words that are very rare in the corpus.
-		This is controlled by the parameter "min_count".
-		If min_count is 2, the "am" will be removed in the above example.
-		And we will end up with the vocab {"cat":3, "dog":4, "is":10}.
-
-		This function also calls the build unigram table function which basically
-		builds a cumulative distribution table. This table is used to get a random
-		word out from the unigram to the power 3/4 distribution.
-		'''
-		self.sentences = LineSentences(self.contentpath)
-		num_sents = len(self.sentences)
-		count_sent = 0
-		for sent in self.sentences:
-			percent_sent_done = (count_sent/num_sents)*100 
-			if percent_sent_done % 5==0: print ("PROGRESS:", percent_sent_done, "%, Working on sentence #",
-								 count_sent, "out of total", num_sents, "sentences")
-			count_sent += 1
-			for w in sent.split(" "):
-				self.total_words_in_corpus += 1
-				w = w.strip()
-				if w in self.vocab:
-					self.vocab[w] += 1
-				else:
-					self.vocab[w] = 1
-		print ("\nThere are total ", self.total_words_in_corpus, " words in corpus of size", num_sents)
-		print ("Out of which ", len(self.vocab), "are distinct words")
-		self.trim_vocab()
-		self.build_sorted_vocab()
-		self.build_unigram_table()
-		print ("After triming vocab we are left with ", len(self.vocab), "distinct words")
-
-	def init_model(self):
-		'''
-		initializing model 
-		weight/parameters from input to proj layer W init random
-		W in MxN. M is the inherent dims of vectors and N is the total number of words in the vocab
-		Z is also MxN weight/parameter matrix from proj to output.
-		Z is init as all 0s.
-		We use dicts data structure for storing W and Z
-				_						_
-		W =  |word1		 word2 ... wordN|
-			1|0.1		0.2			0.4 |
-			.| .		 .			 .	|
-			.| .		 .			 .	|
-			.| .		 .			 .	|
-			M|0.2		0.1			0.8 |
-			 |_						 _|
-		
-		Z =  |word1		 word2 ... wordN|
-			1|0.0		0.0			0.0 |
-			.| .		 .			 .	|
-			.| .		 .			 .	|
-			.| .		 .			 .	|
-			M|0.0		0.0			0.0 |
-			 |_						 _|
-
-		'''
-		
-		for word in self.vocab:
-			self.W[word] = np.random.rand(self.size)
-			self.Z[word] = np.random.rand(self.size)
-
-	def get_random_train_sample_from_a_sent(self, sent, pos_term):
-		s = max(0, pos_term - self.window)
-		e = min(len(sent), pos_term + int(self.window * random.random()))
-		return [sent[s : e], sent[pos_term]]
-
-	def get_random_train_sample_from_a_sent1(self, sent):
-		'''
-                Given a sentence sent get a random sample out of it
-                Random sample means a random word with a context word chosen from surrounding words
-		'''
-
-		#rand_pos_in_sent = np.random.randint(0, len(sent))
-		rand_pos_in_sent = int(len(sent) * random.random())
-		#rand_pos_in_sent = fastrand.pcg32bounded(len(sent))		
-		#rand_pos_in_sent = 2
-
-		if rand_pos_in_sent - self.window < 0: return #check for boundary
-		if rand_pos_in_sent + self.window > len(sent): return
-
-		#op = random.choice(self.ops)
-		#return [sent[rand_pos_in_sent - self.window +  int(self.window*random.random())], sent[rand_pos_in_sent]]
-		#return [sent[op(rand_pos_in_sent,int(self.window*random.random()))], sent[rand_pos_in_sent]]
-		return [sent[rand_pos_in_sent - self.window : rand_pos_in_sent + int(self.window*random.random())], sent[rand_pos_in_sent]]
-		#return [sent[op(rand_pos_in_sent,fastrand.pcg32bounded(self.window))], sent[rand_pos_in_sent]]
-		#return [sent[rand_pos_in_sent - self.window + fastrand.pcg32bounded(self.window * 2)], sent[rand_pos_in_sent]]
-		#return [sent[1], sent[2]]
-
-
-
-	def call_a_sgwithns_thread1(self, local_sents, start, stop, counter_worker):
-		'''
-                This is a function that implements a single thread functionality and should be called from the multiprocessing Process
-                This implements SG model with NS heuristic routine
-                arg1: local_sents is the local copy of LineSentences instance for this thread
-                arg2: start is the starting number of sentence for the chunk of sentences which this thread will train on
-                arg3: stop is the ending number of sentence for the chunk of sentences which this thread will train on
-                arg4: counter_worker is the number of this worker thread
-		'''
-
-		local_num_words_processed = 0
-		local_batch_count = 0
-		labels = np.zeros(self.negative+1)
-		labels[0] = 1.0	
-		for local_iter in range(self.iters): #loop over this worker for iter number of times
-			start_time = time.time()
-			for sent in local_sents[start,stop]: #the data chunk for this worker is [start,stop] so loop over that chunk
-				sent = sent.strip().split(" ") #tokenize the current sentence
-				if len(sent) < self.window: continue #no need to process this small sentence
-
-				for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
-					
-					if local_num_words_processed % self.batch_words == 0:
-						local_batch_count += 1
-						#update current alpha 
-						self.alpha = self.start_alpha * (1.0 - local_num_words_processed / float(self.iters * self.total_words_in_corpus + 1))
-						if self.alpha < self.start_alpha * 0.0001: self.alpha = self.start_alpha * 0.0001
-						
-						print ("WORKER:", counter_worker, ", Iter:", local_iter, ", Batch:", local_batch_count)
-					train_sample = self.get_random_train_sample_from_a_sent(sent) #get a train sample
-					if train_sample is None: continue #if the sample is no good we got a None
-					if train_sample[1] not in self.W: continue #no point training for this term as it is not in W (i.e. trimmed vocab)
-
-					context_word = train_sample[0]
-					focus_word = train_sample[1]
-					if context_word == focus_word: continue #no point predicting from same input same output
-					if context_word not in self.W: continue #no point training with this context term as it is not in vocab
-					v_w = self.W[focus_word]
-					err_sum = np.zeros(self.size)
-					local_num_words_processed += 1
-					
-					words = [context_word]
-					for d in range(0, self.negative):
-						words.append(self.sorted_vocab_words[self.unigram_table.searchsorted(int(self.unigram_table[-1])*random.random())])
-					v_p_ws = np.array([self.Z[word] for word in words]).T
-					f = np.dot(v_w, v_p_ws) #propagate proj to output
-					output = expit(f)
-					g = (labels - output) * self.alpha
-					tmp = np.outer(g,v_w).T
-					for c in range(len(words)): self.Z[words[c]] += tmp[:,c]
-					err_sum += np.dot(g, v_p_ws.T)
-					self.W[focus_word] += err_sum
-			print ("WORKER:", counter_worker, "ITER:", local_iter, "Took time:", time.time()-start_time)	
-		print ("WORKER:", counter_worker, "DONE Training,", "Trained", local_num_words_processed, "examples")
+def build_sorted_vocab(vocab):
+	'''
+	form two lists. one of sorted vocab words. the other of its count.
+	'''
 	
+	sorted_vocab_words = []
+	sorted_vocab_words_counts = []
+	for w in sorted(vocab, key=vocab.get, reverse=True):
+		sorted_vocab_words.append(w)
+		sorted_vocab_words_counts.append(vocab[w])
+	return sorted_vocab_words, sorted_vocab_words_counts
 
-
-
-
+def build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
+	'''
+	We build a unigram table here so that we can call it when getting a random word in negative sampling
+	Following word2vec folks we raise the power of the count to 3/4
 	
-	def call_a_sgwithns_thread(self, local_sents, start, stop, counter_worker):
-		'''
-                This is a function that implements a single thread functionality and should be called from the multiprocessing Process
-                This implements SG model with NS heuristic routine
-                arg1: local_sents is the local copy of LineSentences instance for this thread
-                arg2: start is the starting number of sentence for the chunk of sentences which this thread will train on
-                arg3: stop is the ending number of sentence for the chunk of sentences which this thread will train on
-                arg4: counter_worker is the number of this worker thread
-		'''
+	The unigram table is constructed as follows: 
+	For each word x in the vocab we find its count count(x) in the corpus
+	We raise its count to power 3/4 count(x)^(3/4)
+	Then we divide it by the normalization factor Z = sum_x count(x)^(3/4) where x loops over vocab
+	Save all the results in a list
+	
+	'''
 
-		local_num_words_processed = 0
-		local_batch_count = 0
-		#print ("***", counter_worker, start, stop)
-		
-		for local_iter in range(self.iters): #loop over this worker for iter number of times
-			start_time = time.time()
-			sent_count = 0
-			for sent in local_sents[start,stop]: #the data chunk for this worker is [start,stop] so loop over that chunk
-				sent_count += 1
-				#print ("===", counter_worker, local_iter, sent)
-				sent = sent.strip().split(" ") #tokenize the current sentence
-				if len(sent) < self.window: continue #no need to process this small sentence
+	sum_all_powered_vals = np.sum([np.power(sorted_vocab_words_counts, ns_exponent)])
+	unigram_table = np.zeros(int(EXP_TABLE_SIZE), dtype=np.uint32)
 
-				for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
-					#print (counter_worker, counter_terms)
-					if local_num_words_processed % self.batch_words == 0:
-						local_batch_count += 1
-						#update current alpha 
-						self.alpha = self.start_alpha * (1.0 - local_num_words_processed / float(self.iters * self.total_words_in_corpus + 1))
-						if self.alpha < self.start_alpha * 0.0001: self.alpha = self.start_alpha * 0.0001
-						
-						print ("WORKER:", counter_worker, ", Iter:", local_iter, ", Batch:", local_batch_count)
-					train_sample = self.get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
-					if train_sample is None: continue #if the sample is no good we got a None
-					if train_sample[1] not in self.W: continue #no point training for this term as it is not in W (i.e. trimmed vocab)
-					
-					#context_word = train_sample[0]
-					for context_word in train_sample[0]:	
-						focus_word = train_sample[1]
-						if context_word == focus_word: continue #no point predicting from same input same output
-						if context_word not in self.W: continue #no point training with this context term as it is not in vocab
-						
-						#print ("worker:", counter_worker, "true:", context_word, focus_word)
-						local_num_words_processed += 1
-						
-						neu = np.zeros((self.size),dtype=float)
-						#for d in range(0, self.negative):
-						d = 0
-						while d < self.negative + 1:
-							if d == 0: 
-								label = 1.0
-							else:
-								#context_word = self.sorted_vocab_words[
-								#			self.unigram_table.searchsorted(np.random.randint(self.unigram_table[-1]))]
-								context_word = self.sorted_vocab_words[
-											self.unigram_table.searchsorted(int(self.unigram_table[-1]*random.random()))]
-								#context_word = self.sorted_vocab_words[
-								#			self.unigram_table.searchsorted(fastrand.pcg32bounded(self.unigram_table[-1]))]
-								#context_word = self.sorted_vocab_words[self.unigram_table.searchsorted(self.unigram_table[-1])]
-								if context_word == focus_word: continue
-								label = 0.0
+	cum = 0.0
+	i = 0
+	for j, count in enumerate(sorted_vocab_words_counts):
+		cum += float(math.pow(count, ns_exponent)) / sum_all_powered_vals
+		while i < EXP_TABLE_SIZE and float(i) / EXP_TABLE_SIZE < cum:
+			unigram_table[i] = j
+			i += 1
 
-							#print ("\nd", d, context_word, focus_word)	
-							#print (self.W[focus_word].shape, self.Z[context_word].shape)
-							f = np.dot(self.W[focus_word],self.Z[context_word]) #propagate proj to output
-							#print ("f", f, "sigf", expit(f), "label", label)
-							if (f > self.MAX_EXP): g = (label - 1.0) * self.alpha
-							elif (f < -self.MAX_EXP): g = (label - 0.0) * self.alpha
-							else: g = (label - expit(f)) * self.alpha # gradient calculation
-							print ("iter", local_iter, "sent_count", sent_count, "term_count", counter_terms, "d", d, 
-							       "focus", focus_word, "context", context_word, "f", f, "sigf", expit(f), "label", label, "g", g)
-							neu = neu + (g * self.Z[context_word]) # error sum calculation
-							
-							self.Z[context_word] = self.Z[context_word] + (g * self.W[focus_word]) #learn proj to output
-							d += 1
-						#print (neu)
-						self.W[focus_word] = self.W[focus_word] + neu # learn input to proj
-						#return
-			print ("WORKER:", counter_worker, "ITER:", local_iter, "Took time:", time.time()-start_time)	
-		print ("WORKER:", counter_worker, "DONE Training,", "Trained", local_num_words_processed, "examples")
-		
-	def train_sg_model_with_ns(self):
-		
-		m = ceil(self.total_sents_in_corpus / self.workers)
-		print ("\nWorking with ", self.workers, " workers, with each worker working on", m, "sentences")
-		
-		processes = []
-		counter_worker = 0
-		for counter in range(0,self.total_sents_in_corpus,m):
-			print ("WORKER: ", counter_worker, ", will work on sentences from :", counter, "to: ", min(self.total_sents_in_corpus, counter+m), "\n")
-			local_sents = LineSentences(self.contentpath)
-			processes.append(multiprocessing.Process(target=self.call_a_sgwithns_thread, 
-								  args=(local_sents,counter,min(self.total_sents_in_corpus,counter+m),counter_worker,)))
-			counter_worker += 1
-		for process in processes: process.start()
-		for process in processes: process.join()
+	return unigram_table
+	
+def learn_vocab(contentpath):
+	'''
+	This is where the corpus is scanned and relevant information are extracted
+	This function is called at the start of the modeling.
+	Learning the vocab means populating the self.vocab dictionary with the words
+	found in the corpus along with their total count in the corpus.
+	
+	So if there are 4 words in the corpus "dog", "cat", "is", and "am" with 
+	frequencies/count 4, 3, 10, and 1, respectively, then we will end up with a 
+	vocab {"cat":3, "dog":4, "am":1, "is":10}.
+	
+	We also trim the vocab removing words that are very rare in the corpus.
+	This is controlled by the parameter "min_count".
+	If min_count is 2, the "am" will be removed in the above example.
+	And we will end up with the vocab {"cat":3, "dog":4, "is":10}.
 
-	def build_sg_model(self):
-		'''
-		This function builds the skipgram model
+	This function also calls the build unigram table function which basically
+	builds a cumulative distribution table. This table is used to get a random
+	word out from the unigram to the power 3/4 distribution.
+	'''
+	sentences = LineSentences(contentpath)
+	num_sents = len(sentences)
+	count_sent = 0
+	vocab = {}
+	vocab['<start>'] = 0
+	vocab['<end>'] = 0
+	vocab['<unk>'] = 0
+	total_words_in_corpus = 0
+	for sent in sentences:
+		vocab['<start>'] += 1
+		vocab['<end>'] += 1
+		percent_sent_done = (count_sent/num_sents)*100 
+		if percent_sent_done % 5==0: print ("PROGRESS:", percent_sent_done, "%, Working on sentence #",
+							 count_sent, "out of total", num_sents, "sentences")
+		count_sent += 1
+		for w in sent.split(" "):
+			total_words_in_corpus += 1
+			w = w.strip()
+			if w in vocab:
+				vocab[w] += 1
+			else:
+				vocab[w] = 1
+	print ("\nThere are total ", total_words_in_corpus, " words in corpus of size", num_sents)
+	print ("Out of which ", len(vocab), "are distinct words")
+	return vocab
 
-		'''
-		print ("Building skipgram model...\n")
-		
-		if self.negative > 0:
-			self.train_sg_model_with_ns()
-			print ("\n\nDONE WITH TRAINING SG model with Negative Sampling")
-		else: 
-			#TODO: NOT IMPLEMENTED YET THE SG MODELING WITH HS
-			pass 
+def build_sg_model(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative, 
+			alpha, min_alpha, window, batch_words, iters, workers, ns_exponent, EXP_TABLE_SIZE):
+	'''
+	This function builds the skipgram model
 
-	def build_cbow_model(self):
+	'''
+	print ("Building skipgram model...\n")
+	
+	print ("Now building the unigram table")
+	unigram_table = build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE)
+	print ("Done with building table\n")
 
-		print ("Building cbow model...\n")
-		
-		if self.negative > 0:
-			#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH NS
-			pass
-		else: 
-			#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH HS
-			pass
+	if negative > 0:
+		train_sg_model_with_ns(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
+					alpha, min_alpha, window, batch_words, iters, workers)
+		print ("\n\nDONE WITH TRAINING SG model with Negative Sampling")
+	else: 
+		#TODO: NOT IMPLEMENTED YET THE SG MODELING WITH HS
+		pass 
 
-	def build_model(self):
-		
-		print ("Now learning the vocab of the corpus...\n")
-		self.learn_vocab()
-		print ("Learned vocabulary from corpus\n")
-		
-		self.init_model()
-		print ("initialized model parameters W (input vectors) and Z (output vectors)\n")
+def build_cbow_model(self):
 
-		if self.sg == 1: self.build_sg_model()
-		else: self.build_cbow_model()
+	print ("Building cbow model...\n")
+	
+	if self.negative > 0:
+		#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH NS
+		pass
+	else: 
+		#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH HS
+		pass
 
-	def save(self, out_path):
-		with open(out_path+'/input.vectors', 'wb') as f: pickle.dump(self.W, f, pickle.HIGHEST_PROTOCOL)		
-		with open(out_path+'/output.vectors', 'wb') as f: pickle.dump(self.Z, f, pickle.HIGHEST_PROTOCOL)		
+def save_model(vocab_map,W,Z,out_path):
+	invec = {}
+	for k in vocab_map.keys():
+		invec[k] = np.array([x for x in W[vocab_map[k]]])
+	with open(out_path + "/input.vectors", "wb") as f: pickle.dump(invec, f, pickle.HIGHEST_PROTOCOL)
 
+def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5, 
+			min_count=5, sample=0.001, 
+			workers=3, min_alpha=0.0001, sg=1, negative=5, 
+			ns_exponent=0.75, cbow_mean=1, iters=5, 
+			batch_words=10000, compute_loss=False):
+	
+	EXP_TABLE_SIZE = 1e8
+	MAX_EXP = 6
+	
+	if contentpath: total_sents_in_corpus = len(LineSentences(contentpath))
+	elif sentences: total_sents_in_corpus = len(sentences)
+
+	print ("Now learning the vocab of the corpus...\n")
+	vocab = learn_vocab(contentpath)
+	print ("Learned vocabulary from corpus\n")
+	
+	print ("Now trimming vocab and sorting it in decreasing order of the word counts in corpus")
+	vocab = trim_vocab(vocab, min_count)
+	sorted_vocab_words, sorted_vocab_words_counts = build_sorted_vocab(vocab)
+	vocab_map = build_vocab_map_word2int(sorted_vocab_words)
+	print ("After triming vocab we are left with ", len(vocab), "distinct words")
+	print ("Done with trimming and sorting\n")
+	
+	W, Z = init_model(vocab, size)
+	print ("initialized model parameters W (input vectors) and Z (output vectors)\n")
+
+	if sg == 1: build_sg_model(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative,
+				   alpha, min_alpha, window, batch_words, iters, workers, ns_exponent, EXP_TABLE_SIZE)
+	else: build_cbow_model()
+
+def sigmoid(z):
+	if z > 6: return 1.0
+	elif z < -6: return 0.0
+	else: return 1 / (1 + math.exp(-z))
 
 def main(argv):
-
-	# start up message
-	startup_message = ("\n\n",
-						 "****************************************************************\n",
-						 "Welcome to the MiST (Mining Software Toolkit)\n",
-						 "This tool extracts knowledge from software repository\n",
-						 "People working on this tool: Shayan Ali Akbar (sakbar@purdue.edu)\n",
-						 "****************************************************************\n\n")
-	print (''.join(startup_message))
-	logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
 	# Parse the arguements
 	parser = MyArgParser()
@@ -663,7 +551,7 @@ def main(argv):
 	if args.corpuspath is not None: corpuspath = args.corpuspath
 	if args.processedfilepath is not None: processedfilepath = args.processedfilepath
 	output = args.output
-	
+
 	# Get the sentences from input corpus or preprocessed file
 	if args.corpuspath:
 		# Read the files and preprocess them before giving to the word2vec algorithm
@@ -703,15 +591,15 @@ def main(argv):
 
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = Word2Vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, hs=0, negative=30, iters=20,
-					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=1000)
-	model.build_model()
+	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=1,
+					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
 
 	print ("Saving model to disk ", args.output)
-	model.save(args.output)
+	#save_model(args.output)
 	print ("Saved\n\n")
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
 	main(sys.argv)
