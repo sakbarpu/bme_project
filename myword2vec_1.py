@@ -388,8 +388,9 @@ def call_a_sgwithns_thread(self, local_sents, start, stop, counter_worker):
 
 
 
-
-
+def get_neg_samples(unigram_table, count):
+	indices = np.random.randint(low=0, high=len(unigram_table), size=count)
+	return [unigram_table[i] for i in indices]
 
 def get_random_train_sample_from_a_sent(sent, pos_term):
 	rand_win = ceil(window * random.random())
@@ -407,6 +408,8 @@ def callp(worker):
 	m = ceil(total_sents_in_corpus / workers)
 	start = m * worker 
 	end = min(total_sents_in_corpus, start+m)
+	
+	size = W.shape[1]
 	
 	local_alpha = alpha
 	local_num_words_processed = 0
@@ -435,10 +438,36 @@ def callp(worker):
 
 				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
 				if train_sample is None: continue #if the sample is no good we got a None
-				print ("\n", worker, tmpdelme, sent, train_sample[0], train_sample[1])	
-				#print (worker, end=' ')
-				if counter_terms == 1: return
+				#print ("\n", worker, tmpdelme, sent, train_sample[0], train_sample[1])	
+				#if counter_terms == 1: return
+
 				local_num_words_processed += 1 
+				context = train_sample[0]
+				focus = train_sample[1]
+
+				for context_word in context:
+					#print ("\n",worker,context_word, focus, "W", W[context_word], "Z", Z[focus])
+					# Init neu1e with zeros
+					neu1e = np.zeros(size)
+
+					# Compute neu1e and update syn1
+					if negative > 0:
+						classifiers = [(focus, 1.0)] + [(neg_sample, 0.0) for neg_sample in get_neg_samples(unigram_table, negative)]
+					else:
+						#classifiers = zip(vocab[token].path, vocab[token].code)
+						pass
+
+					#print ("\n", pid, classifiers)
+					for target, label in classifiers:
+						z = np.dot(W[context_word], Z[target])
+						p = sigmoid(z)
+						g = local_alpha * (label - p)
+						neu1e += g * Z[target]				         # Error to backpropagate to syn0
+						Z[target] += g * W[context_word] # Update syn1
+
+					# Update syn0
+					W[context_word] += neu1e
+
 
 def init_process(cp, vm, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp):
 
@@ -471,7 +500,8 @@ def train_sg_model_with_ns(contentpath, vocab_map, sorted_vocab_words, sorted_vo
 					alpha, min_alpha, window, batch_words, iters, workers, current_num_words_processed))
 	pool.map(callp, range(workers))
 	print ("time", time.time() - t) 
-
+	
+	save_model(vocab_map, W, Z, "result/")
 	#processes = []
 	#counter_worker = 0
 	#for counter in range(0,self.total_sents_in_corpus,m):
@@ -510,14 +540,26 @@ def init_model(vocab, size):
 		 |_						 _|
 
 	'''
-	
-	W = np.ctypeslib.as_ctypes(np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size)))
+	'''
+	tmp = np.random.uniform(low=-0.5/dim, high=0.5/dim, size=(vocab_size, dim))
+	syn0 = np.ctypeslib.as_ctypes(tmp)
+	syn0 = Array(syn0._type_, syn0, lock=False)
+
+	# Init syn1 with zeros
+	tmp = np.zeros(shape=(vocab_size, dim))
+	syn1 = np.ctypeslib.as_ctypes(tmp)
+	syn1 = Array(syn1._type_, syn1, lock=False)
+	'''
+
+	tmp = np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size))
+	W = np.ctypeslib.as_ctypes(tmp)	
 	W = Array(W._type_, W, lock=False)
 
-	Z = np.ctypeslib.as_ctypes(np.zeros(shape=(len(vocab),size)))
+	tmp = np.zeros(shape=(len(vocab),size))
+	Z = np.ctypeslib.as_ctypes(tmp)
 	Z = Array(Z._type_, Z, lock=False)
 
-	return W, Z
+	return (W, Z)
 
 def build_vocab_map_word2int(sorted_vocab_words):
 	vocab_map = {}
@@ -660,9 +702,18 @@ def build_cbow_model(self):
 		#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH HS
 		pass
 
-def save(self, out_path):
-	with open(out_path+'/input.vectors', 'wb') as f: pickle.dump(self.W, f, pickle.HIGHEST_PROTOCOL)		
-	with open(out_path+'/output.vectors', 'wb') as f: pickle.dump(self.Z, f, pickle.HIGHEST_PROTOCOL)		
+def save_model(vocab_map,W,Z,out_path):
+	invec = {}
+	for k in vocab_map.keys():
+		invec[k] = np.array([x for x in W[vocab_map[k]]])
+	#for token, vector in zip(vocab_map.keys(), W):
+	#	invec[vocab_map[token]] = np.array([x for x in vector])	
+		#print (token, invec[token][:50])
+	with open(out_path + "/input.vectors", "wb") as f: pickle.dump(invec, f, pickle.HIGHEST_PROTOCOL)
+
+
+	#with open(out_path+'/input.vectors', 'wb') as f: pickle.dump(W, f, pickle.HIGHEST_PROTOCOL)		
+	#with open(out_path+'/output.vectors', 'wb') as f: pickle.dump(Z, f, pickle.HIGHEST_PROTOCOL)		
 
 def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5, 
 			min_count=5, sample=0.001, 
@@ -699,7 +750,6 @@ def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5,
 	if sg == 1: build_sg_model(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative,
 				   alpha, min_alpha, window, batch_words, iters, workers, ns_exponent, EXP_TABLE_SIZE)
 	else: build_cbow_model()
-
 
 
 
@@ -954,8 +1004,8 @@ def train_process(pid):
 			context_start = max(sent_pos - current_win, 0)
 			context_end = min(sent_pos + current_win + 1, len(sent))
 			context = sent[context_start:sent_pos] + sent[sent_pos+1:context_end] # Turn into an iterator?
-			print ("\n...", pid, line, sent, vocab[token], context)
-			return
+			print ("\n...", pid, line, sent, token, context)
+			#if sent_pos == 1: return
 			# CBOW
 			if cbow:
 				# Compute neu1
@@ -992,6 +1042,7 @@ def train_process(pid):
 						classifiers = [(token, 1)] + [(target, 0) for target in table.sample(neg)]
 					else:
 						classifiers = zip(vocab[token].path, vocab[token].code)
+					#print ("\n", pid, classifiers)
 					for target, label in classifiers:
 						z = np.dot(syn0[context_word], syn1[target])
 						p = sigmoid(z)
@@ -1141,17 +1192,17 @@ def main(argv):
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
 	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=20,
-					 window=8, compute_loss=True, workers=5, alpha=0.025, batch_words=10000)
+					 window=8, compute_loss=True, workers=2, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
 
 	print ("Saving model to disk ", args.output)
-	#model.save(args.output)
+	#save_model(args.output)
 	print ("Saved\n\n")
 
 
 if __name__ == '__main__':
-	x = 0 
+	x = 1 
 	if x == 1: main(sys.argv)
 	else:
 		parser = MyArgParser()
@@ -1163,7 +1214,7 @@ if __name__ == '__main__':
 		parser.add_argument('-alpha', help='Starting alpha', dest='alpha', default=0.025, type=float)
 		parser.add_argument('-window', help='Max window length', dest='win', default=8, type=int) 
 		parser.add_argument('-min-count', help='Min count for words used to learn <unk>', dest='min_count', default=3, type=int)
-		parser.add_argument('-processes', help='Number of processes', dest='num_processes', default=5, type=int)
+		parser.add_argument('-processes', help='Number of processes', dest='num_processes', default=2, type=int)
 		parser.add_argument('-binary', help='1 for output model in binary format, 0 otherwise', dest='binary', default=0, type=int)
 		#TO DO: parser.add_argument('-epoch', help='Number of training epochs', dest='epoch', default=1, type=int)
 		args = parser.parse_args()
