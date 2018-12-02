@@ -8,7 +8,6 @@ import random
 import itertools
 import multiprocessing
 import math
-import struct
 import warnings
 import pickle
 import numpy as np
@@ -216,16 +215,19 @@ class Preprocessor:
 
 
 def get_neg_samples(unigram_table, count):
+
 	indices = np.random.randint(low=0, high=len(unigram_table), size=count)
 	return [unigram_table[i] for i in indices]
 
 def get_random_train_sample_from_a_sent(sent, pos_term):
+
 	rand_win = ceil(window * random.random())
 	s = max(0, pos_term - rand_win)
 	e = min(len(sent), pos_term + rand_win + 1)
 	return [sent[s : pos_term] + sent[pos_term + 1 : e], sent[pos_term]]
 
 def callp(worker):
+
 	total_sents_in_corpus = len(content_file)	
 	m = ceil(total_sents_in_corpus / workers)
 	start = m * worker 
@@ -234,8 +236,8 @@ def callp(worker):
 	size = W.shape[1]
 	
 	local_alpha = alpha
-	local_num_words_processed = 0
-	last_local_num_words_processed = 0
+	local_num_words_processed = 0.0
+	last_local_num_words_processed = 0.0
 	
 	for local_iter in range(iters):
 		for sent in content_file[start,end]: #the data chunk for this worker is [start,stop] so loop over that chunk
@@ -243,8 +245,6 @@ def callp(worker):
 			if len(sent) < window: continue #no need to process this small sentence
 			
 			sent = ['<start>'] + sent + ['<end>']
-			tmpdelme = sent
-
 			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
 		
 			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
@@ -261,7 +261,7 @@ def callp(worker):
 				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
 				if train_sample is None: continue #if the sample is no good we got a None
 				
-				local_num_words_processed += 1 
+				local_num_words_processed += 1
 				context = train_sample[0]
 				focus = train_sample[1]
 
@@ -283,6 +283,7 @@ def callp(worker):
 
 					W[context_word] += neu1e
 
+	curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
 
 def init_process(cp, vm, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp):
 
@@ -532,7 +533,8 @@ def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5,
 def sigmoid(z):
 	if z > 6: return 1.0
 	elif z < -6: return 0.0
-	else: return 1 / (1 + math.exp(-z))
+	#else: return 1 / (1 + math.exp(-z))
+	else: return expit(z)
 
 def main(argv):
 

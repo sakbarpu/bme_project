@@ -918,7 +918,6 @@ class UnigramTable:
 		vocab_size = len(vocab)
 		power = 0.75
 		norm = sum([math.pow(t.count, power) for t in vocab]) # Normalizing constant
-		print (norm)
 
 		table_size = 1e8 # Length of the unigram table
 		table = np.zeros(int(table_size), dtype=np.uint32)
@@ -926,8 +925,8 @@ class UnigramTable:
 		print ('Filling unigram table')
 		p = 0 # Cumulative probability
 		i = 0
-		for x in vocab: print (x.word, x.count)
 		for j, unigram in enumerate(vocab):
+			if j%10 == 0 : print (j, "/", len(vocab))
 			p += float(math.pow(unigram.count, power))/norm
 			while i < table_size and float(i) / table_size < p:
 				table[i] = j
@@ -968,7 +967,7 @@ def train_process(pid):
 	
 	#print (pid, start, end, fi.seek(start))
 
-	print ("\n",vocab.vocab_hash)
+	#print ("\n",vocab.vocab_hash)
 	alpha = starting_alpha
 
 	word_count = 0
@@ -994,17 +993,17 @@ def train_process(pid):
 				if alpha < starting_alpha * 0.0001: alpha = starting_alpha * 0.0001
 
 				# Print progress info
-				#sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
-				#				 (alpha, global_word_count.value, vocab.word_count,
-				#				                float(global_word_count.value) / vocab.word_count * 100))
-				#sys.stdout.flush()
+				sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
+								 (alpha, global_word_count.value, vocab.word_count,
+								                float(global_word_count.value) / vocab.word_count * 100))
+				sys.stdout.flush()
 
 			# Randomize window size, where win is the max window size
 			current_win = np.random.randint(low=1, high=win+1)
 			context_start = max(sent_pos - current_win, 0)
 			context_end = min(sent_pos + current_win + 1, len(sent))
 			context = sent[context_start:sent_pos] + sent[sent_pos+1:context_end] # Turn into an iterator?
-			print ("\n...", pid, line, sent, token, context)
+			#print ("\n...", pid, line, sent, token, context)
 			#if sent_pos == 1: return
 			# CBOW
 			if cbow:
@@ -1109,7 +1108,7 @@ def train(fi, fo, cbow, neg, dim, alpha, win, min_count, num_processes, binary):
 		table = UnigramTable(vocab)
 		#print (table.table)
 		#print (table.table.shape)
-		print ([np.count_nonzero(table.table == x) for x in range(len(vocab))])
+		#print ([np.count_nonzero(table.table == x) for x in range(len(vocab))])
 	else:
 		print ('Initializing Huffman tree')
 		vocab.encode_huffman()
@@ -1202,7 +1201,7 @@ def main(argv):
 
 
 if __name__ == '__main__':
-	x = 1 
+	x = 0
 	if x == 1: main(sys.argv)
 	else:
 		parser = MyArgParser()
@@ -1214,7 +1213,7 @@ if __name__ == '__main__':
 		parser.add_argument('-alpha', help='Starting alpha', dest='alpha', default=0.025, type=float)
 		parser.add_argument('-window', help='Max window length', dest='win', default=8, type=int) 
 		parser.add_argument('-min-count', help='Min count for words used to learn <unk>', dest='min_count', default=3, type=int)
-		parser.add_argument('-processes', help='Number of processes', dest='num_processes', default=2, type=int)
+		parser.add_argument('-processes', help='Number of processes', dest='num_processes', default=20, type=int)
 		parser.add_argument('-binary', help='1 for output model in binary format, 0 otherwise', dest='binary', default=0, type=int)
 		#TO DO: parser.add_argument('-epoch', help='Number of training epochs', dest='epoch', default=1, type=int)
 		args = parser.parse_args()
