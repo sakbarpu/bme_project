@@ -217,7 +217,13 @@ class Preprocessor:
 def get_neg_samples(unigram_table, count):
 
 	indices = np.random.randint(low=0, high=len(unigram_table), size=count)
+	#indices = np.array([int(len(unigram_table) * random.random()) for x in range(count)])
 	return [unigram_table[i] for i in indices]
+
+def get_neg_samples_1(unigram_table, count):
+
+	return [unigram_table.searchsorted(np.random.randint(unigram_table[-1])) for x in range(count)]
+	#return indices
 
 def get_random_train_sample_from_a_sent(sent, pos_term):
 
@@ -226,7 +232,7 @@ def get_random_train_sample_from_a_sent(sent, pos_term):
 	e = min(len(sent), pos_term + rand_win + 1)
 	return [sent[s : pos_term] + sent[pos_term + 1 : e], sent[pos_term]]
 
-def callp(worker):
+def callp_1(worker):
 
 	total_sents_in_corpus = len(content_file)	
 	m = ceil(total_sents_in_corpus / workers)
@@ -236,8 +242,8 @@ def callp(worker):
 	size = W.shape[1]
 	
 	local_alpha = alpha
-	local_num_words_processed = 0.0
-	last_local_num_words_processed = 0.0
+	local_num_words_processed = 0
+	last_local_num_words_processed = 0
 	
 	for local_iter in range(iters):
 		for sent in content_file[start,end]: #the data chunk for this worker is [start,stop] so loop over that chunk
@@ -248,6 +254,7 @@ def callp(worker):
 			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
 		
 			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
+				local_num_words_processed += 1
 				if local_num_words_processed  % batch_words == 0:
 					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
 					last_local_num_words_count = local_num_words_processed
@@ -255,16 +262,17 @@ def callp(worker):
 					# Update alpha
 					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
 					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
-					
-					print ("WORKER:", worker, ", Iter:", local_iter, ", Words:", curr_num_words_processed.value, "of", total_words_in_corpus)
+					sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
+								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus * iters,
+								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
+					sys.stdout.flush()
 
 				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
 				if train_sample is None: continue #if the sample is no good we got a None
 				
-				local_num_words_processed += 1
 				context = train_sample[0]
 				focus = train_sample[1]
-
+				
 				for context_word in context:
 					neu1e = np.zeros(size)
 
@@ -283,7 +291,68 @@ def callp(worker):
 
 					W[context_word] += neu1e
 
-	curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
+def callp(worker):
+
+	total_sents_in_corpus = len(content_file)	
+	m = ceil(total_sents_in_corpus / workers)
+	start = m * worker 
+	end = min(total_sents_in_corpus, start+m)
+	
+	size = W.shape[1]
+	
+	local_alpha = alpha
+	local_num_words_processed = 0
+	last_local_num_words_processed = 0
+	labels = np.zeros(negative+1)
+	labels[0] = 1.0	
+	for local_iter in range(iters):
+		#print (local_iter)
+		for sent in content_file[start,end]: #the data chunk for this worker is [start,stop] so loop over that chunk
+			sent = sent.strip().split(" ") #tokenize the current sentence
+			if len(sent) < window: continue #no need to process this small sentence
+			
+			sent = ['<start>'] + sent + ['<end>']
+			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
+		
+			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
+				local_num_words_processed += 1
+				if local_num_words_processed  % batch_words == 0:
+					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
+					last_local_num_words_count = local_num_words_processed
+
+					# Update alpha
+					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
+					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
+					sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
+								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus * iters,
+								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
+					sys.stdout.flush()
+
+				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
+				if train_sample is None: continue #if the sample is no good we got a None
+				
+				context = train_sample[0]
+				focus = train_sample[1]
+				for context_word in context:
+					targets = [focus]
+					v_w = W[context_word]
+					neu1e = np.zeros(size)
+
+					if negative > 0:
+						targets.extend(get_neg_samples(unigram_table,negative))
+						#classifiers = [(focus, 1.0)] + [(neg_sample, 0.0) for neg_sample in get_neg_samples(unigram_table, negative)]
+					else:
+						#classifiers = zip(vocab[token].path, vocab[token].code)
+						pass
+					v_wps = Z[targets].T
+					z = np.dot(v_w, v_wps)
+					p = expit(z)
+					g = (labels - p) * local_alpha
+					neu1e = np.sum(g * v_wps, axis=1)
+					tmp = np.zeros(size)
+					for gx in g: tmp += gx * v_w
+					Z[targets] += tmp
+					W[context_word] += neu1e	
 
 def init_process(cp, vm, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp):
 
@@ -315,7 +384,7 @@ def train_sg_model_with_ns(contentpath, vocab_map, sorted_vocab_words, sorted_vo
 			initargs=(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
 					alpha, min_alpha, window, batch_words, iters, workers, current_num_words_processed))
 	pool.map(callp, range(workers))
-	print ("time", time.time() - t) 
+	print ("\nTook time to train only:", time.time() - t, "sec") 
 	
 	save_model(vocab_map, W, Z, "result/")
 
@@ -327,22 +396,22 @@ def init_model(vocab, size):
 	Z is also MxN weight/parameter matrix from proj to output.
 	Z is init as all 0s.
 	We use dicts data structure for storing W and Z
-			_						_
-	W =  |word1		 word2 ... wordN|
-		1|0.1		0.2			0.4 |
+		  _	 					_
+	W = 	 |word1		word2 	... 		wordN	|
+		1|0.1		0.2			0.4 	|
 		.| .		 .			 .	|
 		.| .		 .			 .	|
 		.| .		 .			 .	|
-		M|0.2		0.1			0.8 |
-		 |_						 _|
+		M|0.2		0.1			0.8 	|
+		 |_						|
 	
-	Z =  |word1		 word2 ... wordN|
-		1|0.0		0.0			0.0 |
+	Z =  	 |word1		 word2 		... 	wordN	|
+		1|0.0		0.0			0.0 	|
 		.| .		 .			 .	|
 		.| .		 .			 .	|
 		.| .		 .			 .	|
-		M|0.0		0.0			0.0 |
-		 |_						 _|
+		M|0.0		0.0			0.0 	|
+		 |_						|
 
 	'''
 
@@ -391,7 +460,7 @@ def build_sorted_vocab(vocab):
 		sorted_vocab_words_counts.append(vocab[w])
 	return sorted_vocab_words, sorted_vocab_words_counts
 
-def build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
+def build_unigram_table_1(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
 	'''
 	We build a unigram table here so that we can call it when getting a random word in negative sampling
 	Following word2vec folks we raise the power of the count to 3/4
@@ -416,6 +485,48 @@ def build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
 			i += 1
 
 	return unigram_table
+	
+def build_unigram_table_2(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
+	
+	domain = 2**31 - 1
+	vocab_size = len(sorted_vocab_words_counts)
+	unigram_table = np.zeros(vocab_size, dtype=np.uint32)
+	sum_all_powered_vals = 0.0
+	for idx in range(vocab_size):
+		sum_all_powered_vals += sorted_vocab_words_counts[idx] ** ns_exponent
+	p = 0.0
+	for idx in range(vocab_size):
+		p += sorted_vocab_words_counts[idx] ** ns_exponent
+		unigram_table[idx] = round(p / sum_all_powered_vals * domain)
+	if len(unigram_table) > 0: 
+		assert unigram_table[-1] == domain
+	
+	return unigram_table
+
+def build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
+	
+	domain = 2**31 - 1
+	vocab_size = len(sorted_vocab_words_counts)
+	unigram_table = np.zeros(vocab_size, dtype=np.uint32)
+	sum_all_powered_vals = 0.0
+	for idx in range(vocab_size):
+		sum_all_powered_vals += sorted_vocab_words_counts[idx] ** ns_exponent
+	p = 0.0
+	for idx in range(vocab_size):
+		p += sorted_vocab_words_counts[idx] ** ns_exponent
+		unigram_table[idx] = round(p / sum_all_powered_vals * domain)
+	if len(unigram_table) > 0: 
+		assert unigram_table[-1] == domain
+	#print (unigram_table)
+	#print (len(set(unigram_table)))
+	#print (len(sorted_vocab_words_counts))
+	#print (min(unigram_table))
+	tmp = [int(x) for x in unigram_table / unigram_table[0]]
+	#print (tmp)
+	tmp = [list(itertools.repeat(x,y)) for x,y in zip(range(vocab_size), tmp)]
+	
+	return [item for sublist in tmp for item in sublist]
+	
 	
 def learn_vocab(contentpath):
 	'''
@@ -533,8 +644,7 @@ def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5,
 def sigmoid(z):
 	if z > 6: return 1.0
 	elif z < -6: return 0.0
-	#else: return 1 / (1 + math.exp(-z))
-	else: return expit(z)
+	else: return 1 / (1 + math.exp(-z))
 
 def main(argv):
 
@@ -593,7 +703,7 @@ def main(argv):
 
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=1,
+	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=20,
 					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
