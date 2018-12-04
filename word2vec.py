@@ -46,7 +46,6 @@ class LineSentences:
 		self.infile.seek(0)
 		if type(key) is int:
 			return next(itertools.islice(self.infile, key, key+1))
-			#yield itertools.islice(self.infile, key, key+1)
 		elif type(key) is tuple:
 			tmp = []
 			for x in itertools.islice(self.infile, key[0], key[1]):
@@ -263,7 +262,7 @@ def callp_1(worker):
 					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
 					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
 					sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
-								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus * iters,
+								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus,
 								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
 					sys.stdout.flush()
 
@@ -703,7 +702,7 @@ def main(argv):
 
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=20,
+	model = word2vec(contentpath=processedfilepath, min_count=3, size=800, sg=1, negative=5, iters=20,
 					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
