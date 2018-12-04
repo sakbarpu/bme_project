@@ -231,7 +231,7 @@ def get_random_train_sample_from_a_sent(sent, pos_term):
 	e = min(len(sent), pos_term + rand_win + 1)
 	return [sent[s : pos_term] + sent[pos_term + 1 : e], sent[pos_term]]
 
-def callp_1(worker):
+def callp(worker):
 
 	total_sents_in_corpus = len(content_file)	
 	m = ceil(total_sents_in_corpus / workers)
@@ -250,14 +250,16 @@ def callp_1(worker):
 			if len(sent) < window: continue #no need to process this small sentence
 			
 			sent = ['<start>'] + sent + ['<end>']
+			senttmp = sent
 			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
-		
+				
 			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
-				local_num_words_processed += 1
+				#print (worker, local_num_words_processed, total_words_in_corpus, senttmp[counter_terms])
 				if local_num_words_processed  % batch_words == 0:
 					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
-					last_local_num_words_count = local_num_words_processed
-
+					last_local_num_words_processed = local_num_words_processed
+					#print (local_num_words_processed, last_local_num_words_processed, curr_num_words_processed.value)
+					if local_num_words_processed != 0.0: return
 					# Update alpha
 					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
 					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
@@ -289,8 +291,9 @@ def callp_1(worker):
 						Z[target] += g * W[context_word] # Update syn1
 
 					W[context_word] += neu1e
+				local_num_words_processed += 1
 
-def callp(worker):
+def callp_1(worker):
 
 	total_sents_in_corpus = len(content_file)	
 	m = ceil(total_sents_in_corpus / workers)
@@ -353,35 +356,35 @@ def callp(worker):
 					Z[targets] += tmp
 					W[context_word] += neu1e	
 
-def init_process(cp, vm, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp):
+def init_process(cp, vm, tw, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp):
 
 	global content_file, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative
 	global alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed, total_words_in_corpus
 
-	contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, Wt, Zt, unigram_table, negative = cp, vm, vws, vwscs, w, z, ut, neg 
+	contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, Wt, Zt, unigram_table, negative = cp, vm, tw, vws, vwscs, w, z, ut, neg 
 	alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed =  a, ma, win, bws, its, works, cnwp
 
 	content_file = LineSentences(cp)
-	total_words_in_corpus = sum(sorted_vocab_words_counts)
+	#total_words_in_corpus = sum(sorted_vocab_words_counts)
 
 	with warnings.catch_warnings():
 		warnings.simplefilter('ignore', RuntimeWarning)
 		W = np.ctypeslib.as_array(Wt)
 		Z = np.ctypeslib.as_array(Zt)
 
-def train_sg_model_with_ns(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
+def train_sg_model_with_ns(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
 				alpha, min_alpha, window, batch_words, iters, workers):
 
 	total_sents_in_corpus = len(LineSentences(contentpath))
 	m = ceil(total_sents_in_corpus / workers)
 	print ("\nWorking with ", workers, " workers, with each worker working on", m, "sentences")
 
-	current_num_words_processed = Value('i', 0)	
+	curr_num_words_processed = Value('i', 0)	
 
 	t = time.time()
 	pool = Pool(processes=workers, initializer=init_process,
-			initargs=(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
-					alpha, min_alpha, window, batch_words, iters, workers, current_num_words_processed))
+			initargs=(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
+					alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed))
 	pool.map(callp, range(workers))
 	print ("\nTook time to train only:", time.time() - t, "sec") 
 	
@@ -558,6 +561,7 @@ def learn_vocab(contentpath):
 	for sent in sentences:
 		vocab['<start>'] += 1
 		vocab['<end>'] += 1
+		total_words_in_corpus += 2
 		percent_sent_done = (count_sent/num_sents)*100 
 		if percent_sent_done % 5==0: print ("PROGRESS:", percent_sent_done, "%, Working on sentence #",
 							 count_sent, "out of total", num_sents, "sentences")
@@ -571,9 +575,9 @@ def learn_vocab(contentpath):
 				vocab[w] = 1
 	print ("\nThere are total ", total_words_in_corpus, " words in corpus of size", num_sents)
 	print ("Out of which ", len(vocab), "are distinct words")
-	return vocab
+	return vocab, total_words_in_corpus
 
-def build_sg_model(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative, 
+def build_sg_model(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative, 
 			alpha, min_alpha, window, batch_words, iters, workers, ns_exponent, EXP_TABLE_SIZE):
 	'''
 	This function builds the skipgram model
@@ -586,7 +590,7 @@ def build_sg_model(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_word
 	print ("Done with building table\n")
 
 	if negative > 0:
-		train_sg_model_with_ns(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
+		train_sg_model_with_ns(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
 					alpha, min_alpha, window, batch_words, iters, workers)
 		print ("\n\nDONE WITH TRAINING SG model with Negative Sampling")
 	else: 
@@ -623,7 +627,7 @@ def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5,
 	elif sentences: total_sents_in_corpus = len(sentences)
 
 	print ("Now learning the vocab of the corpus...\n")
-	vocab = learn_vocab(contentpath)
+	vocab, total_words_in_corpus = learn_vocab(contentpath)
 	print ("Learned vocabulary from corpus\n")
 	
 	print ("Now trimming vocab and sorting it in decreasing order of the word counts in corpus")
@@ -636,7 +640,7 @@ def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5,
 	W, Z = init_model(vocab, size)
 	print ("initialized model parameters W (input vectors) and Z (output vectors)\n")
 
-	if sg == 1: build_sg_model(contentpath, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative,
+	if sg == 1: build_sg_model(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative,
 				   alpha, min_alpha, window, batch_words, iters, workers, ns_exponent, EXP_TABLE_SIZE)
 	else: build_cbow_model()
 
@@ -702,8 +706,8 @@ def main(argv):
 
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = word2vec(contentpath=processedfilepath, min_count=3, size=800, sg=1, negative=5, iters=20,
-					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
+	model = word2vec(contentpath=processedfilepath, min_count=3, size=800, sg=1, negative=5, iters=1,
+					 window=8, compute_loss=True, workers=2, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
 
