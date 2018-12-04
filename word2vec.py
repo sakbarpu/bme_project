@@ -259,7 +259,7 @@ def callp(worker):
 					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
 					last_local_num_words_processed = local_num_words_processed
 					#print (local_num_words_processed, last_local_num_words_processed, curr_num_words_processed.value)
-					if local_num_words_processed != 0.0: return
+					#if local_num_words_processed != 0.0: return
 					# Update alpha
 					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
 					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
@@ -706,8 +706,8 @@ def main(argv):
 
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = word2vec(contentpath=processedfilepath, min_count=3, size=800, sg=1, negative=5, iters=1,
-					 window=8, compute_loss=True, workers=2, alpha=0.025, batch_words=10000)
+	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=1,
+					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
 
