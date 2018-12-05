@@ -260,10 +260,10 @@ def callp(worker):
 					# Update alpha
 					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
 					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
-					sys.stdout.write("\rLoss: $f Alpha: %f Progress: %d of %d (%.2f%%)" %
+					sys.stdout.write("\rLoss: %f Alpha: %f Progress: %d of %d (%.2f%%)" %
 								 (loss.value, local_alpha, curr_num_words_processed.value, total_words_in_corpus,
 								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
-					sys.stdout.flush()
+					#sys.stdout.flush()
 
 				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
 				if train_sample is None: continue #if the sample is no good we got a None
