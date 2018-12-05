@@ -443,10 +443,12 @@ def trim_vocab(vocab, min_count):
 	'''
 
 	vocab['<unk>'] = 0
+	words2del = []
 	for k in list(vocab.keys()):
 		if vocab[k] < min_count:
+			words2del.append(k)
 			vocab['<unk>'] += 1
-			del vocab[k]
+	for k in words2del: del vocab[k]
 	if '<unk>' not in vocab: vocab['<unk>'] = 0
 	return vocab
 
