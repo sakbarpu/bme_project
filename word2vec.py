@@ -260,9 +260,10 @@ def callp(worker):
 					# Update alpha
 					local_alpha = alpha * (1 - float(curr_num_words_processed.value) / float(iters * total_words_in_corpus + 1))
 					if local_alpha < alpha * 0.0001: local_alpha = alpha * 0.0001
-					sys.stdout.write("\rLoss: $f Alpha: %f Progress: %d of %d (%.2f%%)" %
-								 (loss.value, local_alpha, curr_num_words_processed.value, total_words_in_corpus,
+					sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
+								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus,
 								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
+					#print ("\n")
 					sys.stdout.flush()
 
 				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
@@ -286,12 +287,17 @@ def callp(worker):
 						g = local_alpha * (label - p)
 						neu1e += g * Z[target]				         # Error to backpropagate to syn0
 						Z[target] += g * W[context_word] # Update syn1
-						if label == 0.0: loss.value -= math.log(expit(-z))
-						else: loss.value -= math.log( expit(z) )
+						#if label == 0.0: loss.value -= math.log(expit(-z))
+						#else: loss.value -= math.log( expit(z) )
 
 					W[context_word] += neu1e
 				local_num_words_processed += 1
-
+	
+	curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
+	sys.stdout.write ("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
+								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus,
+								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
+	sys.stdout.flush()
 
 def callp_1(worker):
 
@@ -708,7 +714,7 @@ def main(argv):
 
 	print ("Now training with word2vec algorithm\n\n")
 	t0 = time.time()
-	model = word2vec(contentpath=processedfilepath, min_count=3, size=1000, sg=1, negative=30, iters=1,
+	model = word2vec(contentpath=processedfilepath, min_count=5, size=500, sg=1, negative=5, iters=1,
 					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
