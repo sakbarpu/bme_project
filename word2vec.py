@@ -6,14 +6,12 @@ import regex
 import string
 import random
 import itertools
-import multiprocessing
+import multiprocessing as mp
 import math
 import warnings
 import pickle
 import numpy as np
 
-from multiprocessing import Pool, Value, Array
-from math import ceil
 from scipy.special import expit
 
 class MyArgParser(argparse.ArgumentParser):
@@ -24,6 +22,11 @@ class MyArgParser(argparse.ArgumentParser):
 		sys.exit(2)
 
 class LineSentences:
+        '''
+        The purpose of this class is to read sentences/documents from a single file.
+        The format of the file is such that each document is on a separate line.
+
+        '''
 
 	def __init__(self, inpath):
 		
@@ -226,15 +229,29 @@ def get_neg_samples_1(unigram_table, count):
 
 def get_random_train_sample_from_a_sent(sent, pos_term):
 
-	rand_win = ceil(window * random.random())
+	rand_win = math.ceil(window * random.random())
 	s = max(0, pos_term - rand_win)
 	e = min(len(sent), pos_term + rand_win + 1)
 	return [sent[s : pos_term] + sent[pos_term + 1 : e], sent[pos_term]]
 
+def sigmoid(f):
+	if f > 6: return 1.0
+	elif f < -6: return 0.0
+	else: return 1 / (1 + math.exp(-f))
+
+def save_model(vocab_map,W,Z,out_path):
+	invec = {}
+	for k in vocab_map.keys():
+		invec[k] = np.array([x for x in W[vocab_map[k]]])
+	with open(out_path + "/input.vectors", "wb") as f: pickle.dump(invec, f, pickle.HIGHEST_PROTOCOL)
+
 def callp(worker):
+        '''
+        this is the meat of the code where neural network is trained for each process
+        '''
 
 	total_sents_in_corpus = len(content_file)	
-	m = ceil(total_sents_in_corpus / workers)
+	m = math.ceil(total_sents_in_corpus / workers)
 	start = m * worker 
 	end = min(total_sents_in_corpus, start+m)
 	
@@ -253,7 +270,7 @@ def callp(worker):
 			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
 				
 			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
-				if (local_num_words_processed + 1) % batch_words == 0:
+				if (local_num_words_processed + 1) % batch_words == 0:#one batch finishes
 					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
 					last_local_num_words_processed = local_num_words_processed
 					
@@ -263,7 +280,6 @@ def callp(worker):
 					sys.stdout.write("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
 								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus,
 								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
-					#print ("\n")
 					sys.stdout.flush()
 
 				train_sample = get_random_train_sample_from_a_sent(sent, counter_terms) #get a train sample
@@ -272,25 +288,21 @@ def callp(worker):
 				context = train_sample[0]
 				focus = train_sample[1]
 				
-				for context_word in context:
+				for context_word in context: #for each context word in the window around focus word
 					neu1e = np.zeros(size)
 
-					if negative > 0:
-						classifiers = [(focus, 1.0)] + [(neg_sample, 0.0) for neg_sample in get_neg_samples(unigram_table, negative)]
-					else:
-						#classifiers = zip(vocab[token].path, vocab[token].code)
-						pass
+					if negative > 0: clfs = [(focus, 1.0)] + [(neg_sample, 0.0) for neg_sample in get_neg_samples(unigram_table, negative)]
 
-					for target, label in classifiers:
-						z = np.dot(W[context_word], Z[target])
-						p = sigmoid(z)
-						g = local_alpha * (label - p)
-						neu1e += g * Z[target]				         # Error to backpropagate to syn0
-						Z[target] += g * W[context_word] # Update syn1
-						#if label == 0.0: loss.value -= math.log(expit(-z))
-						#else: loss.value -= math.log( expit(z) )
+					for target, label in clfs:
+						f = np.dot(W[context_word], Z[target]) #get net score
+						p = sigmoid(f) #get probability estimate
+						g = local_alpha * (label - p) #get gradient for this example
+						neu1e += g * Z[target] #get the error for this example
+						Z[target] += g * W[context_word] #update output vector
+						if label == 0.0: loss.value -= math.log(expit(-z)) #loss calculation for negative samples
+						else: loss.value -= math.log( expit(z) ) #loss calculation for positive sample
 
-					W[context_word] += neu1e
+					W[context_word] += neu1e #update input vector
 				local_num_words_processed += 1
 	
 	curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
@@ -299,10 +311,14 @@ def callp(worker):
 								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
 	sys.stdout.flush()
 
-def callp_1(worker):
-
+def callp_vectorized(worker):
+        '''
+        this is the vectorized version of the training
+        '''
+        
+        #which sentences does this process work on
 	total_sents_in_corpus = len(content_file)	
-	m = ceil(total_sents_in_corpus / workers)
+	m = math.ceil(total_sents_in_corpus / workers)
 	start = m * worker 
 	end = min(total_sents_in_corpus, start+m)
 	
@@ -313,18 +329,17 @@ def callp_1(worker):
 	last_local_num_words_processed = 0
 	labels = np.zeros(negative+1)
 	labels[0] = 1.0	
-	for local_iter in range(iters):
-		#print (local_iter)
+	for local_iter in range(iters): #go over all the sentences [start,end] again for next iteration
 		for sent in content_file[start,end]: #the data chunk for this worker is [start,stop] so loop over that chunk
 			sent = sent.strip().split(" ") #tokenize the current sentence
 			if len(sent) < window: continue #no need to process this small sentence
 			
-			sent = ['<start>'] + sent + ['<end>']
-			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent]
+			sent = ['<start>'] + sent + ['<end>'] #add the start and end tokens
+			sent = [vocab_map[word] if word in vocab_map else vocab_map['<unk>'] for word in sent] #convert sent from string to list of ints idxes of words
 		
 			for counter_terms in range(len(sent)): #loop over the sentence the length of sentence times
 				local_num_words_processed += 1
-				if local_num_words_processed  % batch_words == 0:
+				if local_num_words_processed  % batch_words == 0: #on batch has finished update alpha (with linear decay)
 					curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
 					last_local_num_words_count = local_num_words_processed
 
@@ -341,38 +356,41 @@ def callp_1(worker):
 				
 				context = train_sample[0]
 				focus = train_sample[1]
-				for context_word in context:
+				for context_word in context: #for each context word in the window around focus word
 					targets = [focus]
 					v_w = W[context_word]
 					neu1e = np.zeros(size)
 
-					if negative > 0:
-						targets.extend(get_neg_samples(unigram_table,negative))
-						#classifiers = [(focus, 1.0)] + [(neg_sample, 0.0) for neg_sample in get_neg_samples(unigram_table, negative)]
-					else:
-						#classifiers = zip(vocab[token].path, vocab[token].code)
-						pass
-					v_wps = Z[targets].T
-					z = np.dot(v_w, v_wps)
-					p = expit(z)
-					g = (labels - p) * local_alpha
-					neu1e = np.sum(g * v_wps, axis=1)
-					tmp = np.zeros(size)
-					for gx in g: tmp += gx * v_w
-					Z[targets] += tmp
-					W[context_word] += neu1e	
+					if negative > 0: targets.extend(get_neg_samples(unigram_table,negative))
+					v_wps = Z[targets].T #gather the output vectors for computation
+					f = np.dot(v_w, v_wps) #get net score
+					p = expit(f) #get probability estimate
+					g = (labels - p) * local_alpha #get gradient for this example
+					neu1e = np.sum(g * v_wps, axis=1) #get error
+					tmp = np.zeros(size) 
+					for gx in g: tmp += gx * v_w #this tmp is going to be used to update output vectors
+					Z[targets] += tmp #update output vectors
+					W[context_word] += neu1e #update input vectors
+
+        curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
+	sys.stdout.write ("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
+								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus,
+								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
+	sys.stdout.flush()
 
 def init_process(cp, vm, tw, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp, l):
 
+        #define a lot of global variables to share across processes
+        #notice how the local variables we get as arguments are different in names than global ones
 	global content_file, vocab_map, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative
 	global alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed, total_words_in_corpus, loss
 
 	contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, Wt, Zt, unigram_table, negative = cp, vm, tw, vws, vwscs, w, z, ut, neg 
 	alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed, loss =  a, ma, win, bws, its, works, cnwp, l
 
-	content_file = LineSentences(cp)
+	content_file = LineSentences(cp) #open the input sentences file to read
 
-	with warnings.catch_warnings():
+	with warnings.catch_warnings():#if there is no avaialbility of ctypeslib then revert to the np array
 		warnings.simplefilter('ignore', RuntimeWarning)
 		W = np.ctypeslib.as_array(Wt)
 		Z = np.ctypeslib.as_array(Zt)
@@ -380,20 +398,24 @@ def init_process(cp, vm, tw, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, wo
 def train_sg_model_with_ns(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
 				alpha, min_alpha, window, batch_words, iters, workers):
 
+        #how many sentences is each worker/process going to work on is decided as follows
 	total_sents_in_corpus = len(LineSentences(contentpath))
-	m = ceil(total_sents_in_corpus / workers)
+	m = math.ceil(total_sents_in_corpus / workers)
 	print ("\nWorking with ", workers, " workers, with each worker working on", m, "sentences")
 
-	curr_num_words_processed = Value('i', 0)	
-	loss = Value('d', 0.0)
+        #we define some global mp values. defining them this way lets us use them in every process globally
+	curr_num_words_processed = mp.Value('i', 0)	
+	loss = mp.Value('d', 0.0)
 
+        #now we call the processes using mp library
 	t = time.time()
-	pool = Pool(processes=workers, initializer=init_process,
+	pool = mp.Pool(processes=workers, initializer=init_process,
 			initargs=(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
 					alpha, min_alpha, window, batch_words, iters, workers, curr_num_words_processed, loss))
 	pool.map(callp, range(workers))
 	print ("\nTook time to train only:", time.time() - t, "sec") 
 	
+        #finally we save the model
 	save_model(vocab_map, W, Z, "result/")
 
 def init_model(vocab, size):
@@ -403,7 +425,6 @@ def init_model(vocab, size):
 	W in MxN. M is the inherent dims of vectors and N is the total number of words in the vocab
 	Z is also MxN weight/parameter matrix from proj to output.
 	Z is init as all 0s.
-	We use dicts data structure for storing W and Z
 		  _	 					_
 	W = 	 |word1		word2 	... 		wordN	|
 		1|0.1		0.2			0.4 	|
@@ -422,18 +443,20 @@ def init_model(vocab, size):
 		 |_						|
 
 	'''
-
-	tmp = np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size))
-	W = np.ctypeslib.as_ctypes(tmp)	
-	W = Array(W._type_, W, lock=False)
-
-	tmp = np.zeros(shape=(len(vocab),size))
-	Z = np.ctypeslib.as_ctypes(tmp)
-	Z = Array(Z._type_, Z, lock=False)
+        
+        W = np.ctypeslib.as_ctypes(np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size)))	
+        Z = np.ctypeslib.as_ctypes(np.zeros(shape=(len(vocab),size)))
+	
+        W = mp.Array(W._type_, W, lock=False)
+	Z = mp.Array(Z._type_, Z, lock=False)
 
 	return (W, Z)
 
 def build_vocab_map_word2int(sorted_vocab_words):
+        '''
+        Each word in the vocab is mapped to an integer so that we can acess its 
+        vectors from the matrices W and Z using just indexes
+        '''
 	vocab_map = {}
 	c = 0
 	for word in sorted_vocab_words:
@@ -527,14 +550,9 @@ def build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
 		unigram_table[idx] = round(p / sum_all_powered_vals * domain)
 	if len(unigram_table) > 0: 
 		assert unigram_table[-1] == domain
-	#print (unigram_table)
-	#print (len(set(unigram_table)))
-	#print (len(sorted_vocab_words_counts))
-	#print (min(unigram_table))
-	tmp = [int(x) for x in unigram_table / unigram_table[0]]
-	#print (tmp)
-	tmp = [list(itertools.repeat(x,y)) for x,y in zip(range(vocab_size), tmp)]
 	
+        tmp = [int(x) for x in unigram_table / unigram_table[0]]
+	tmp = [list(itertools.repeat(x,y)) for x,y in zip(range(vocab_size), tmp)]
 	return [item for sublist in tmp for item in sublist]
 	
 	
@@ -601,26 +619,6 @@ def build_sg_model(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_w
 		train_sg_model_with_ns(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, unigram_table, negative, 
 					alpha, min_alpha, window, batch_words, iters, workers)
 		print ("\n\nDONE WITH TRAINING SG model with Negative Sampling")
-	else: 
-		#TODO: NOT IMPLEMENTED YET THE SG MODELING WITH HS
-		pass 
-
-def build_cbow_model(self):
-
-	print ("Building cbow model...\n")
-	
-	if self.negative > 0:
-		#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH NS
-		pass
-	else: 
-		#TODO: NOT IMPLEMENTED YET THE CBOW MODELING WITH HS
-		pass
-
-def save_model(vocab_map,W,Z,out_path):
-	invec = {}
-	for k in vocab_map.keys():
-		invec[k] = np.array([x for x in W[vocab_map[k]]])
-	with open(out_path + "/input.vectors", "wb") as f: pickle.dump(invec, f, pickle.HIGHEST_PROTOCOL)
 
 def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5, 
 			min_count=5, sample=0.001, 
@@ -650,12 +648,6 @@ def word2vec(contentpath=None, sentences=None, size=100, alpha=0.025, window=5,
 
 	if sg == 1: build_sg_model(contentpath, vocab_map, total_words_in_corpus, sorted_vocab_words, sorted_vocab_words_counts, W, Z, negative,
 				   alpha, min_alpha, window, batch_words, iters, workers, ns_exponent, EXP_TABLE_SIZE)
-	else: build_cbow_model()
-
-def sigmoid(z):
-	if z > 6: return 1.0
-	elif z < -6: return 0.0
-	else: return 1 / (1 + math.exp(-z))
 
 def main(argv):
 
@@ -718,11 +710,6 @@ def main(argv):
 					 window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
 	t1 = time.time()
 	print ("Done. Took time: ", t1-t0, "secs\n\n")
-
-	print ("Saving model to disk ", args.output)
-	#save_model(args.output)
-	print ("Saved\n\n")
-
 
 if __name__ == '__main__':
 	main(sys.argv)

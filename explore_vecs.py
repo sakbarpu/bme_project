@@ -5,9 +5,6 @@ import regex
 import pickle
 import numpy as np
 
-import warnings
-warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
-
 from scipy.spatial.distance import cosine
 
 class MyArgParser(argparse.ArgumentParser):
@@ -45,15 +42,6 @@ def top_most_similar(vecs):
 		print (r, ':', x[1], x[2])
 		r+=1
 def main(argv):
-
-	# start up message
-	startup_message = ("\n\n",
-					   "****************************************************************\n",
-					   "Welcome to the MiST (Mining Software Toolkit)\n",
-					   "This tool extracts knowledge from software repository\n",
-					   "People working on this tool: Shayan Ali Akbar (sakbar@purdue.edu)\n",
-					   "****************************************************************\n\n")
-	print (''.join(startup_message))
 
 	# Parse the arguements
 	parser = MyArgParser()
