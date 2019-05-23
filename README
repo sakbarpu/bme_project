@@ -11,6 +11,10 @@ Project Description;;;
 	
 	Mikolov et al., "Distributed representations of words and phrases and their compositionality", NIPS 2013.
 
+	We have used word2vec based word embeddings for software search in SCOR
+	source code retrieval engine.
+	https://engineering.purdue.edu/RVL/SCOR_WordEmbeddings/
+
 Libraries required;;;
 
 	sys, os, time
