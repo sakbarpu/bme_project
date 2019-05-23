@@ -51,6 +51,18 @@ How to use the scripts;;;
 	in the form of a sentence. Each sentence is present at a separate line
 	in the preprocessed file.
 
+	If you want to explore the vectors created by this script you can use another
+	script as follows:
+
+
+	usage: explore_vecs.py [-h] -vecspath vecs_path
+
+	optional arguments:
+	  -h, --help            show this help message and exit
+	  -vecspath vecs_path, --vecspath vecs_path
+				which directory contains vectors
+
+
 How does the output look like;;;
 
 	The output consists of a pickle file which contains the input vectors
