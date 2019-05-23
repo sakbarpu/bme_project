@@ -267,7 +267,6 @@ def callp(worker):
 	local_num_words_processed = 0
 	last_local_num_words_processed = 0
 
-	print ("\n\nWe are printing progress information below everytime a batch finishes inside a process\n")
 	#loop over all the iterations (that is how many corpus is scanned by word2vec)	
 	for local_iter in range(iters):
 		for sent in content_file[start,end]: #the data chunk for this worker/process is [start,end] so loop over that chunk
@@ -356,6 +355,7 @@ def train_sg_model_with_ns(contentpath, vocab_map, total_words_in_corpus, sorted
 	curr_num_words_processed = mp.Value('i', 0)	
 	loss = mp.Value('d', 0.0)
 
+	print ("\n\nWe are printing progress information below everytime a batch finishes inside a process\n")
         #now we call the processes using mp library
 	t = time.time()
 	pool = mp.Pool(processes=workers, initializer=init_process,
