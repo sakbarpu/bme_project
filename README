@@ -51,6 +51,35 @@ How to use the scripts;;;
 	in the form of a sentence. Each sentence is present at a separate line
 	in the preprocessed file.
 
+	To play with the parameters of word2vec like size of vectors find and change 
+	the following line in the code:
+
+        model = word2vec(contentpath=processedfilepath, min_count=5, size=500, sg=1, negative=5, iters=1,
+                                         window=8, compute_loss=True, workers=20, alpha=0.025, batch_words=10000)
+
+	min_count ====> minimum number of occurrences of the word in the corpus to be 
+			considered by word2vec for creating its vector
+
+	size =========> number of dimensions of the vector produced by word2vec
+	
+	sg ===========> this is always true as of now. (change later)
+
+	negative =====> number of negative examples to be considered for negative sampling
+
+	iters ========> number of iterations (i.e. number of times corpus is scanned for training)
+
+	window =======> size of window used for scanning
+
+	compute_loss => not implemented yet (leave as is)
+
+	workers ======> how many processors to use in multiprocessing implementation
+
+	alpha ========> learning rate
+
+	batch_words ==> size of a batch
+
+
+
 	If you want to explore the vectors created by this script you can use another
 	script as follows:
 
@@ -61,6 +90,9 @@ How to use the scripts;;;
 	  -h, --help            show this help message and exit
 	  -vecspath vecs_path, --vecspath vecs_path
 				which directory contains vectors
+
+	
+
 
 
 How does the output look like;;;
