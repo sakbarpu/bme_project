@@ -1,0 +1,58 @@
+Project Description;;;
+
+	The goal of this repo is to implement word2vec from scratch in python
+	without using any high-level machine learning libraries such as 
+	Pytorch, or Tensorflow, or scikit-learn.
+
+	There are, however, many python libraries imported to implement word2vec
+	which perform low level operations on numbers, arrays, and strings.
+
+	The project implements word2vec skipgram model.
+	
+	Mikolov et al., "Distributed representations of words and phrases and their compositionality", NIPS 2013.
+
+Libraries required;;;
+
+	sys, os, time
+	argparse
+	fnmatch
+	nltk #only used for stemming (a preprocessing step for text data which may be ignored)
+	regex
+	string
+	random
+	itertools
+	multiprocessing as mp
+	math
+	warnings
+	pickle
+	numpy as np
+	scipy.special # for expit function
+
+
+How to use the scripts;;;
+
+	usage: word2vec.py [-h] [-corpuspath corpus_dir]
+			   [-processedfilepath processed_file_path] -output output_dir
+
+	optional arguments:
+	  -h, --help            show this help message and exit
+	  -corpuspath corpus_dir, --corpuspath corpus_dir
+				which directory is containing corpus (e.g. eclipse
+				path)
+	  -processedfilepath processed_file_path, --processedfilepath processed_file_path
+				which directory is containing the preprocessed file
+				(each document in a separate line)
+	  -output output_dir, --output output_dir
+				which directory is output
+
+	
+	The script can either be provided the root path to the raw input files in
+	corpuspath argument or a preprocessed file path which contains each file
+	in the form of a sentence. Each sentence is present at a separate line
+	in the preprocessed file.
+
+How does the output look like;;;
+
+	The output consists of a pickle file which contains the input vectors
+	in the form of a python dictionary.
+

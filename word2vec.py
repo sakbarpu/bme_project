@@ -22,12 +22,11 @@ class MyArgParser(argparse.ArgumentParser):
 		sys.exit(2)
 
 class LineSentences:
-        '''
-        The purpose of this class is to read sentences/documents from a single file.
-        The format of the file is such that each document is on a separate line.
+	'''
+	The purpose of this class is to read sentences/documents from a single file.
+	The format of the file is such that each document is on a separate line.
 
-        '''
-
+	'''
 	def __init__(self, inpath):
 		
 		self.infile = open(inpath, encoding="iso-8859-15")
@@ -246,9 +245,9 @@ def save_model(vocab_map,W,Z,out_path):
 	with open(out_path + "/input.vectors", "wb") as f: pickle.dump(invec, f, pickle.HIGHEST_PROTOCOL)
 
 def callp(worker):
-        '''
-        this is the meat of the code where neural network is trained for each process
-        '''
+	'''
+	this is the meat of the code where neural network is trained for each process
+	'''
 
 	total_sents_in_corpus = len(content_file)	
 	m = math.ceil(total_sents_in_corpus / workers)
@@ -312,9 +311,9 @@ def callp(worker):
 	sys.stdout.flush()
 
 def callp_vectorized(worker):
-        '''
-        this is the vectorized version of the training
-        '''
+	'''
+	this is the vectorized version of the training
+	'''
         
         #which sentences does this process work on
 	total_sents_in_corpus = len(content_file)	
@@ -372,10 +371,10 @@ def callp_vectorized(worker):
 					Z[targets] += tmp #update output vectors
 					W[context_word] += neu1e #update input vectors
 
-        curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
+	curr_num_words_processed.value += (local_num_words_processed - last_local_num_words_processed)
 	sys.stdout.write ("\rAlpha: %f Progress: %d of %d (%.2f%%)" %
 								 (local_alpha, curr_num_words_processed.value, total_words_in_corpus,
-								                float(curr_num_words_processed.value) / total_words_in_corpus * 100))
+										float(curr_num_words_processed.value) / total_words_in_corpus * 100))
 	sys.stdout.flush()
 
 def init_process(cp, vm, tw, vws, vwscs, w, z, ut, neg, a, ma, win, bws, its, works, cnwp, l):
@@ -444,19 +443,19 @@ def init_model(vocab, size):
 
 	'''
         
-        W = np.ctypeslib.as_ctypes(np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size)))	
-        Z = np.ctypeslib.as_ctypes(np.zeros(shape=(len(vocab),size)))
-	
-        W = mp.Array(W._type_, W, lock=False)
+	W = np.ctypeslib.as_ctypes(np.random.uniform(low=-0.5/size, high=0.5/size, size=(len(vocab), size)))	
+	Z = np.ctypeslib.as_ctypes(np.zeros(shape=(len(vocab),size)))
+
+	W = mp.Array(W._type_, W, lock=False)
 	Z = mp.Array(Z._type_, Z, lock=False)
 
 	return (W, Z)
 
 def build_vocab_map_word2int(sorted_vocab_words):
-        '''
-        Each word in the vocab is mapped to an integer so that we can acess its 
-        vectors from the matrices W and Z using just indexes
-        '''
+	'''
+	Each word in the vocab is mapped to an integer so that we can acess its 
+	vectors from the matrices W and Z using just indexes
+	'''
 	vocab_map = {}
 	c = 0
 	for word in sorted_vocab_words:
@@ -551,10 +550,10 @@ def build_unigram_table(sorted_vocab_words_counts, ns_exponent, EXP_TABLE_SIZE):
 	if len(unigram_table) > 0: 
 		assert unigram_table[-1] == domain
 	
-        tmp = [int(x) for x in unigram_table / unigram_table[0]]
+	tmp = [int(x) for x in unigram_table / unigram_table[0]]
 	tmp = [list(itertools.repeat(x,y)) for x,y in zip(range(vocab_size), tmp)]
 	return [item for sublist in tmp for item in sublist]
-	
+
 	
 def learn_vocab(contentpath):
 	'''
